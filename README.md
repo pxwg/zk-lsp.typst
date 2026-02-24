@@ -24,7 +24,7 @@ Replaces the Lua/Python automation in `~/wiki` with a single compiled binary tha
 git clone https://github.com/you/zk-lsp
 cd zk-lsp
 cargo build --release
-cp target/release/zk-lsp ~/.local/bin/
+ln target/release/zk-lsp ~/.local/bin/
 ```
 
 ## Wiki Structure
@@ -126,7 +126,7 @@ The server advertises these capabilities:
 | Code actions | On diagnostic ranges (archived / legacy) |
 | References | `gr` / `textDocument/references` |
 | Tag formatter | `willSaveWaitUntil` for `*/note/*.typ` |
-| Workspace symbols | `:lua vim.lsp.buf.workspace_symbol("")` |
+| Workspace symbols | `:lua vim.lsp.buf.workspace_symbol("")` (WIP) |
 
 ### Commands exposed via `executeCommand`
 
@@ -165,6 +165,12 @@ When the tag becomes `done` or `wip`, the server applies a `WorkspaceEdit` to ti
 |---|---|
 | `WIKI_ROOT` | Default wiki root path |
 | `ZK_LSP_LOG` | Log level filter (`info`, `debug`, `trace`) |
+
+## To-Do
+
+- [ ] Workspace symbols for note titles and aliases
+- [ ] `zk.exportContext` command to export a note and its references as Markdown
+- [ ] `zk-lsp init` command to scaffold a basic `include.typ` and `link.typ` if missing
 
 ## License
 
