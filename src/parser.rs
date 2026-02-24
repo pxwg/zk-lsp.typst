@@ -165,7 +165,15 @@ pub fn count_todos(content: &str) -> TodoStatus {
     status
 }
 
+/// Convert a byte offset within `s` to a UTF-16 code-unit offset.
+/// LSP `character` positions are UTF-16 code units, not bytes or scalar values.
+pub fn byte_to_utf16(s: &str, byte_offset: usize) -> u32 {
+    s[..byte_offset].chars().map(|c| c.len_utf16() as u32).sum()
+}
+
 /// Find all @ID occurrences in content (10-digit IDs).
+/// `start_char` / `end_char` are **byte** offsets within the line (not UTF-16).
+/// Convert with `byte_to_utf16` before using as LSP character positions.
 pub fn find_all_refs(content: &str) -> Vec<RefOccurrence> {
     let mut refs = Vec::new();
     for (line_num, line) in content.lines().enumerate() {
@@ -269,6 +277,20 @@ Content. @2602082037
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].id, "2602082037");
         assert_eq!(refs[1].id, "2602082106");
+    }
+
+    #[test]
+    fn test_byte_to_utf16_cjk() {
+        // "你好 " = 3+3+1 = 7 bytes, but 3 UTF-16 code units
+        let line = "Hello, world 你好 @2602171536";
+        let refs = find_all_refs(line);
+        assert_eq!(refs.len(), 1);
+        // '@' byte offset = 13 + 3 + 3 + 1 = 20
+        assert_eq!(refs[0].start_char, 20);
+        // UTF-16 offset = 13 + 1 + 1 + 1 = 16
+        assert_eq!(byte_to_utf16(line, refs[0].start_char as usize), 16);
+        // end byte offset = 20 + 11 = 31, UTF-16 = 16 + 11 = 27
+        assert_eq!(byte_to_utf16(line, refs[0].end_char as usize), 27);
     }
 
     #[test]

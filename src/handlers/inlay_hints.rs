@@ -26,7 +26,7 @@ pub fn get_inlay_hints(
                 hints.push(InlayHint {
                     position: Position {
                         line: r.line,
-                        character: r.end_char,
+                        character: parser::byte_to_utf16(line, r.end_char as usize),
                     },
                     label: InlayHintLabel::String(info.title.clone()),
                     kind: Some(InlayHintKind::TYPE),

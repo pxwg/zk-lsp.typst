@@ -139,14 +139,18 @@ impl NoteIndex {
             self.notes.insert(header.id.clone(), info);
         }
 
-        // Update backlinks from this file
+        // Update backlinks from this file.
+        // Convert byte offsets to UTF-16 code-unit offsets (required by LSP) here,
+        // while the line text is available.
+        let lines: Vec<&str> = content.lines().collect();
         let refs = parser::find_all_refs(&content);
         for r in refs {
+            let line_text = lines.get(r.line as usize).copied().unwrap_or("");
             let loc = BacklinkLocation {
                 file: path.to_path_buf(),
                 line: r.line,
-                start_char: r.start_char,
-                end_char: r.end_char,
+                start_char: parser::byte_to_utf16(line_text, r.start_char as usize),
+                end_char: parser::byte_to_utf16(line_text, r.end_char as usize),
             };
             self.backlinks.entry(r.id).or_default().push(loc);
         }

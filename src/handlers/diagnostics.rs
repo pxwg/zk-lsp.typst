@@ -25,11 +25,11 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diagnostic>
             let range = Range {
                 start: Position {
                     line: line_num as u32,
-                    character: r.start_char,
+                    character: parser::byte_to_utf16(line, r.start_char as usize),
                 },
                 end: Position {
                     line: line_num as u32,
-                    character: r.end_char,
+                    character: parser::byte_to_utf16(line, r.end_char as usize),
                 },
             };
 
