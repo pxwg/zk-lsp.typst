@@ -14,13 +14,20 @@ pub struct DiagnosticData {
 }
 
 /// Generate diagnostics for all @ID references in the document content.
-pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diagnostic> {
+pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) -> Vec<Diagnostic> {
+    let note_id = uri_path
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.strip_suffix(".typ"))
+        .unwrap_or("");
     let mut diagnostics = Vec::new();
 
     for (line_num, line) in content.lines().enumerate() {
         let refs = parser::find_all_refs(line);
         for r in refs {
-            let Some(info) = index.get(&r.id) else { continue };
+            let Some(info) = index.get(&r.id) else {
+                continue;
+            };
 
             let range = Range {
                 start: Position {
@@ -36,6 +43,9 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diagnostic>
             if info.archived {
                 let mut msg = format!("Note @{} is archived.", r.id);
                 if let Some(ref alt) = info.alt_id {
+                    if alt == note_id {
+                        continue;
+                    }
                     msg.push_str(&format!(" New version: @{alt}"));
                 }
                 let data = DiagnosticData {
@@ -43,27 +53,25 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diagnostic>
                     old_id: r.id.clone(),
                     new_id: info.alt_id.clone(),
                 };
-                diagnostics.push(Diagnostic {
-                    range,
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    source: Some("zk-lsp".into()),
-                    message: msg,
-                    data: Some(serde_json::to_value(data).unwrap()),
-                    ..Default::default()
-                });
+                let alt_id = info.alt_id.clone().unwrap_or_default();
+                if alt_id != note_id {
+                    diagnostics.push(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        source: Some("zk-lsp".into()),
+                        message: msg,
+                        data: Some(serde_json::to_value(data).unwrap()),
+                        ..Default::default()
+                    });
+                }
             } else if info.legacy {
                 // Suppression: if next @token on same line matches evo_id, skip
                 let should_warn = if let Some(ref evo) = info.evo_id {
                     let after = &line[r.end_char as usize..];
-                    let next_ref = after
-                        .trim_start()
-                        .strip_prefix('@')
-                        .and_then(|s| {
-                            let end = s
-                                .find(|c: char| !c.is_ascii_digit())
-                                .unwrap_or(s.len());
-                            Some(&s[..end])
-                        });
+                    let next_ref = after.trim_start().strip_prefix('@').and_then(|s| {
+                        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+                        Some(&s[..end])
+                    });
                     next_ref != Some(evo.as_str())
                 } else {
                     true
@@ -79,14 +87,17 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diagnostic>
                         old_id: r.id.clone(),
                         new_id: info.evo_id.clone(),
                     };
-                    diagnostics.push(Diagnostic {
-                        range,
-                        severity: Some(DiagnosticSeverity::INFORMATION),
-                        source: Some("zk-lsp".into()),
-                        message: msg,
-                        data: Some(serde_json::to_value(data).unwrap()),
-                        ..Default::default()
-                    });
+                    let evo_id = info.evo_id.clone().unwrap_or_default();
+                    if evo_id != note_id {
+                        diagnostics.push(Diagnostic {
+                            range,
+                            severity: Some(DiagnosticSeverity::INFORMATION),
+                            source: Some("zk-lsp".into()),
+                            message: msg,
+                            data: Some(serde_json::to_value(data).unwrap()),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }

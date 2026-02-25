@@ -25,7 +25,7 @@ impl ZkLspServer {
     }
 
     async fn publish_diagnostics(&self, uri: Url, content: &str) {
-        let diags = diagnostics::get_diagnostics(content, &self.index);
+        let diags = diagnostics::get_diagnostics(content, &self.index, uri.path());
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 }
