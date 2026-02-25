@@ -49,7 +49,8 @@ async fn main() -> anyhow::Result<()> {
             use std::io::Read;
             let mut content = String::new();
             std::io::stdin().read_to_string(&mut content)?;
-            let formatted = handlers::formatting::format_content(&content);
+            let formatted =
+                handlers::formatting::format_content(&content, &config.note_dir).await;
             print!("{formatted}");
         }
     }

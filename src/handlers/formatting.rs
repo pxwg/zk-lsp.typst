@@ -1,14 +1,19 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use tower_lsp::lsp_types::*;
 
 use crate::index::NoteIndex;
 use crate::parser::{self, StatusTag};
 
+static RE_TODO_ID: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\d{10})").unwrap());
+
 /// Apply the tag-line formatting to `content` and return the result.
-/// If no change is needed the original content is returned unchanged.
-pub fn format_content(content: &str) -> String {
+/// Internal helper; no cross-file I/O.
+fn apply_tag_edit(content: &str) -> String {
     let Some(edit) = compute_tag_edit(content) else {
         return content.to_string();
     };
@@ -19,6 +24,94 @@ pub fn format_content(content: &str) -> String {
     }
     let trailing_newline = content.ends_with('\n');
     let mut out = lines.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    out
+}
+
+/// Format `content`:
+/// 1. Update `- [ ] @<id>` / `- [x] @<id>` checkboxes by reading referenced
+///    notes from `note_dir` — all IDs on a line must be Done for the box to be
+///    checked, otherwise the box is cleared.
+/// 2. Recompute and apply the note's own status tag based on the updated
+///    checkbox state.
+pub async fn format_content(content: &str, note_dir: &Path) -> String {
+    let updated = update_ref_checkboxes(content, note_dir).await;
+    apply_tag_edit(&updated)
+}
+
+/// Returns true iff the note at `path` has an effective tag of `done`.
+///
+/// "Effective" means: simulate what `apply_tag_edit` would produce, then read
+/// the resulting tag line.  This way the judgment is always based on the tag
+/// (not on raw todo counts), while still handling the case where the on-disk
+/// tag is stale.
+///
+/// Concretely:
+/// - If `compute_tag_edit` would change the tag line → use the new text.
+/// - If the tag line is already correct (no edit needed) → use the existing one.
+/// Either way we check for the literal string `#tag.done`.
+async fn ref_is_done(path: &Path) -> bool {
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return false;
+    };
+    let Some(header) = parser::parse_header(&content) else {
+        return false;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let existing = lines
+        .get(header.tag_line_idx)
+        .copied()
+        .unwrap_or("")
+        .to_string();
+    let effective = match compute_tag_edit(&content) {
+        Some(edit) => edit.new_text,
+        None => existing,
+    };
+    effective.contains("#tag.done")
+}
+
+/// Update `- [ ] @id` / `- [x] @id` checkboxes in `content`.
+/// All `@id` references on a todo line must resolve to Done for the box to be
+/// checked; if any is not Done (or the file cannot be read) the box is cleared.
+async fn update_ref_checkboxes(content: &str, note_dir: &Path) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    let mut changed = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        if !is_todo_line(line) {
+            continue;
+        }
+        let ids: Vec<&str> = RE_TODO_ID
+            .captures_iter(line)
+            .filter_map(|c| c.get(1).map(|m| m.as_str()))
+            .collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let mut all_done = true;
+        for id in &ids {
+            if !ref_is_done(&note_dir.join(format!("{id}.typ"))).await {
+                all_done = false;
+                break;
+            }
+        }
+        let new_state = if all_done { 'x' } else { ' ' };
+        if get_todo_state(line) != Some(new_state) {
+            if let Some(new_line) = replace_todo_state(line, new_state) {
+                result[i] = new_line;
+                changed = true;
+            }
+        }
+    }
+
+    if !changed {
+        return content.to_string();
+    }
+    let trailing_newline = content.ends_with('\n');
+    let mut out = result.join("\n");
     if trailing_newline {
         out.push('\n');
     }
