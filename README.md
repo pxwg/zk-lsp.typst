@@ -126,7 +126,7 @@ The server advertises these capabilities:
 | Code actions | On diagnostic ranges (archived / legacy) |
 | References | `gr` / `textDocument/references` |
 | Tag formatter | `willSaveWaitUntil` for `*/note/*.typ` |
-| Workspace symbols | `:lua vim.lsp.buf.workspace_symbol("")` (WIP) |
+| Workspace symbols | `:lua vim.lsp.buf.workspace_symbol(query-string)` |
 
 ### Commands exposed via `executeCommand`
 
