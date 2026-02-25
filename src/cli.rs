@@ -30,4 +30,6 @@ pub enum Command {
         /// The 10-digit note ID (YYMMDDHHMM)
         id: String,
     },
+    /// Format a note: read from stdin, write formatted content to stdout
+    Format,
 }

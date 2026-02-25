@@ -45,6 +45,13 @@ async fn main() -> anyhow::Result<()> {
             note_ops::delete_note(&id, &config).await?;
             eprintln!("Note {id} removed.");
         }
+        Command::Format => {
+            use std::io::Read;
+            let mut content = String::new();
+            std::io::stdin().read_to_string(&mut content)?;
+            let formatted = handlers::formatting::format_content(&content);
+            print!("{formatted}");
+        }
     }
     Ok(())
 }

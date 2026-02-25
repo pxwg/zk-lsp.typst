@@ -50,8 +50,8 @@ impl LanguageServer for ZkLspServer {
                         save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
                             include_text: Some(true),
                         })),
-                        will_save: Some(true),
-                        will_save_wait_until: Some(true),
+                        will_save: None,
+                        will_save_wait_until: None,
                     },
                 )),
                 references_provider: Some(OneOf::Left(true)),
@@ -179,30 +179,6 @@ impl LanguageServer for ZkLspServer {
                 }
             }
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // willSaveWaitUntil — return tag edit before save is applied
-    // -----------------------------------------------------------------------
-
-    async fn will_save_wait_until(
-        &self,
-        params: WillSaveTextDocumentParams,
-    ) -> LspResult<Option<Vec<TextEdit>>> {
-        let uri = &params.text_document.uri;
-        if !uri.path().contains("/note/") {
-            return Ok(None);
-        }
-        let content = match uri
-            .to_file_path()
-            .ok()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-        {
-            Some(c) => c,
-            None => return Ok(None),
-        };
-        let edit = formatting::compute_tag_edit(&content);
-        Ok(edit.map(|e| vec![e]))
     }
 
     // -----------------------------------------------------------------------

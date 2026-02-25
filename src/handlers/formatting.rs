@@ -6,6 +6,25 @@ use tower_lsp::lsp_types::*;
 use crate::index::NoteIndex;
 use crate::parser::{self, StatusTag};
 
+/// Apply the tag-line formatting to `content` and return the result.
+/// If no change is needed the original content is returned unchanged.
+pub fn format_content(content: &str) -> String {
+    let Some(edit) = compute_tag_edit(content) else {
+        return content.to_string();
+    };
+    let line_num = edit.range.start.line as usize;
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    if line_num < lines.len() {
+        lines[line_num] = edit.new_text;
+    }
+    let trailing_newline = content.ends_with('\n');
+    let mut out = lines.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    out
+}
+
 /// Compute the TextEdit needed to update the tag line, if any change is required.
 /// Returns None if no change is needed.
 pub fn compute_tag_edit(content: &str) -> Option<TextEdit> {
