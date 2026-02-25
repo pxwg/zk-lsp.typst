@@ -21,7 +21,11 @@ pub struct ZkLspServer {
 impl ZkLspServer {
     pub fn new(client: Client, config: Arc<WikiConfig>) -> Self {
         let index = Arc::new(NoteIndex::new(Arc::clone(&config)));
-        ZkLspServer { client, index, config }
+        ZkLspServer {
+            client,
+            index,
+            config,
+        }
     }
 
     async fn publish_diagnostics(&self, uri: Url, content: &str) {
@@ -112,9 +116,11 @@ impl LanguageServer for ZkLspServer {
         let uri = params.text_document.uri.clone();
         let content = match params.text {
             Some(t) => t,
-            None => match uri.to_file_path().ok().and_then(|p| {
-                std::fs::read_to_string(p).ok()
-            }) {
+            None => match uri
+                .to_file_path()
+                .ok()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+            {
                 Some(t) => t,
                 None => return,
             },
@@ -132,18 +138,18 @@ impl LanguageServer for ZkLspServer {
         if uri.path().contains("/note/") {
             if let Some(header) = crate::parser::parse_header(&content) {
                 let todos = crate::parser::count_todos(&content);
-                if let Some(new_tag) = crate::parser::compute_status_tag(&todos, header.archived)
-                {
+                if let Some(new_tag) = crate::parser::compute_status_tag(&todos, header.archived) {
                     if new_tag == StatusTag::Done || new_tag == StatusTag::Wip {
-                        match formatting::propagate_tag_change(
-                            &header.id,
-                            &new_tag,
-                            &self.index,
-                        )
-                        .await
+                        match formatting::propagate_tag_change(&header.id, &new_tag, &self.index)
+                            .await
                         {
                             Ok(edit) => {
-                                if edit.changes.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+                                if edit
+                                    .changes
+                                    .as_ref()
+                                    .map(|c| !c.is_empty())
+                                    .unwrap_or(false)
+                                {
                                     let _ = self.client.apply_edit(edit).await;
                                 }
                             }
@@ -187,9 +193,11 @@ impl LanguageServer for ZkLspServer {
         if !uri.path().contains("/note/") {
             return Ok(None);
         }
-        let content = match uri.to_file_path().ok().and_then(|p| {
-            std::fs::read_to_string(p).ok()
-        }) {
+        let content = match uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        {
             Some(c) => c,
             None => return Ok(None),
         };
@@ -204,9 +212,11 @@ impl LanguageServer for ZkLspServer {
     async fn references(&self, params: ReferenceParams) -> LspResult<Option<Vec<Location>>> {
         let uri = &params.text_document_position.text_document.uri;
         let row = params.text_document_position.position.line as usize;
-        let content = match uri.to_file_path().ok().and_then(|p| {
-            std::fs::read_to_string(p).ok()
-        }) {
+        let content = match uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        {
             Some(c) => c,
             None => return Ok(None),
         };
@@ -219,14 +229,9 @@ impl LanguageServer for ZkLspServer {
     // Code actions
     // -----------------------------------------------------------------------
 
-    async fn code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> LspResult<Option<CodeActionResponse>> {
-        let actions = code_actions::get_code_actions(
-            &params.text_document.uri,
-            &params.context.diagnostics,
-        );
+    async fn code_action(&self, params: CodeActionParams) -> LspResult<Option<CodeActionResponse>> {
+        let actions =
+            code_actions::get_code_actions(&params.text_document.uri, &params.context.diagnostics);
         Ok(Some(actions))
     }
 
@@ -234,19 +239,17 @@ impl LanguageServer for ZkLspServer {
     // Inlay hints
     // -----------------------------------------------------------------------
 
-    async fn inlay_hint(
-        &self,
-        params: InlayHintParams,
-    ) -> LspResult<Option<Vec<InlayHint>>> {
+    async fn inlay_hint(&self, params: InlayHintParams) -> LspResult<Option<Vec<InlayHint>>> {
         let uri = &params.text_document.uri;
-        let content = match uri.to_file_path().ok().and_then(|p| {
-            std::fs::read_to_string(p).ok()
-        }) {
+        let content = match uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        {
             Some(c) => c,
             None => return Ok(None),
         };
-        let hints =
-            inlay_hints::get_inlay_hints(&content, params.range, &self.index);
+        let hints = inlay_hints::get_inlay_hints(&content, params.range, &self.index);
         Ok(Some(hints))
     }
 
@@ -286,17 +289,12 @@ impl LanguageServer for ZkLspServer {
     // Execute command
     // -----------------------------------------------------------------------
 
-    async fn execute_command(
-        &self,
-        params: ExecuteCommandParams,
-    ) -> LspResult<Option<Value>> {
+    async fn execute_command(&self, params: ExecuteCommandParams) -> LspResult<Option<Value>> {
         match params.command.as_str() {
-            "zk.generateLinkTyp" => {
-                match link_gen::generate_link_typ(&self.config).await {
-                    Ok(()) => info!("link.typ regenerated"),
-                    Err(e) => error!("generate_link_typ: {e}"),
-                }
-            }
+            "zk.generateLinkTyp" => match link_gen::generate_link_typ(&self.config).await {
+                Ok(()) => info!("link.typ regenerated"),
+                Err(e) => error!("generate_link_typ: {e}"),
+            },
             "zk.newNote" => {
                 let with_meta = params
                     .arguments

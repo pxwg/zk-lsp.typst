@@ -25,6 +25,10 @@ impl WikiConfig {
     pub fn from_root(root: PathBuf) -> Self {
         let note_dir = root.join("note");
         let link_file = root.join("link.typ");
-        WikiConfig { root, note_dir, link_file }
+        WikiConfig {
+            root,
+            note_dir,
+            link_file,
+        }
     }
 }

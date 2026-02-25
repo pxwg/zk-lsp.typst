@@ -46,7 +46,10 @@ pub fn compute_tag_edit(content: &str) -> Option<TextEdit> {
     let line_num = header.tag_line_idx as u32;
     Some(TextEdit {
         range: Range {
-            start: Position { line: line_num, character: 0 },
+            start: Position {
+                line: line_num,
+                character: 0,
+            },
             end: Position {
                 line: line_num,
                 character: tag_line.len() as u32,
@@ -63,7 +66,11 @@ pub async fn propagate_tag_change(
     new_tag: &StatusTag,
     index: &Arc<NoteIndex>,
 ) -> Result<WorkspaceEdit> {
-    let new_state = if *new_tag == StatusTag::Done { 'x' } else { ' ' };
+    let new_state = if *new_tag == StatusTag::Done {
+        'x'
+    } else {
+        ' '
+    };
     let pattern = format!("@{note_id}");
 
     let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
@@ -97,7 +104,10 @@ pub async fn propagate_tag_change(
             if let Some(new_line) = replace_todo_state(line, new_state) {
                 edits.push(TextEdit {
                     range: Range {
-                        start: Position { line: line_num as u32, character: 0 },
+                        start: Position {
+                            line: line_num as u32,
+                            character: 0,
+                        },
                         end: Position {
                             line: line_num as u32,
                             character: line.len() as u32,
@@ -114,7 +124,10 @@ pub async fn propagate_tag_change(
         }
     }
 
-    Ok(WorkspaceEdit { changes: Some(changes), ..Default::default() })
+    Ok(WorkspaceEdit {
+        changes: Some(changes),
+        ..Default::default()
+    })
 }
 
 fn is_todo_line(line: &str) -> bool {

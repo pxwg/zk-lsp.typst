@@ -6,11 +6,7 @@ use crate::index::NoteIndex;
 use crate::parser;
 
 /// Produce inlay hints for all @ID references in the given line range.
-pub fn get_inlay_hints(
-    content: &str,
-    range: Range,
-    index: &Arc<NoteIndex>,
-) -> Vec<InlayHint> {
+pub fn get_inlay_hints(content: &str, range: Range, index: &Arc<NoteIndex>) -> Vec<InlayHint> {
     let mut hints = Vec::new();
 
     let start_line = range.start.line as usize;

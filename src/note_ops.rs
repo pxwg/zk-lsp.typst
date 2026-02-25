@@ -21,9 +21,7 @@ pub async fn create_note(config: &WikiConfig, with_metadata: bool) -> Result<Pat
                  #import \"../include.typ\": *\n#show: zettel\n\n=  <{id}>\n#tag.\n\n"
             )
         } else {
-            format!(
-                "#import \"../include.typ\": *\n#show: zettel\n\n=  <{id}>\n#tag.\n\n"
-            )
+            format!("#import \"../include.typ\": *\n#show: zettel\n\n=  <{id}>\n#tag.\n\n")
         };
         fs::write(&path, &content)
             .await

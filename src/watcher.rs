@@ -25,8 +25,7 @@ pub fn start_watcher(
     std::thread::spawn(move || {
         let _rt = tokio::runtime::Handle::try_current();
         let (fs_tx, fs_rx) = std::sync::mpsc::channel();
-        let mut debouncer =
-            new_debouncer(Duration::from_millis(300), fs_tx).expect("debouncer");
+        let mut debouncer = new_debouncer(Duration::from_millis(300), fs_tx).expect("debouncer");
         debouncer
             .watcher()
             .watch(&note_dir, RecursiveMode::NonRecursive)

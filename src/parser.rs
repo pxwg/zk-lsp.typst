@@ -250,7 +250,7 @@ Content. @2602082037
         assert_eq!(h.aliases, vec!["ZK LSP"]);
         assert_eq!(h.keywords, vec!["test", "rust"]);
         assert_eq!(h.title_line_idx, 9); // import at 6, +3
-        assert_eq!(h.tag_line_idx, 10);  // import at 6, +4
+        assert_eq!(h.tag_line_idx, 10); // import at 6, +4
     }
 
     #[test]
@@ -295,16 +295,34 @@ Content. @2602082037
 
     #[test]
     fn test_compute_status_tag() {
-        let all_done = TodoStatus { completed: 3, incomplete: 0 };
+        let all_done = TodoStatus {
+            completed: 3,
+            incomplete: 0,
+        };
         assert_eq!(compute_status_tag(&all_done, false), Some(StatusTag::Done));
 
-        let mixed = TodoStatus { completed: 1, incomplete: 2 };
+        let mixed = TodoStatus {
+            completed: 1,
+            incomplete: 2,
+        };
         assert_eq!(compute_status_tag(&mixed, false), Some(StatusTag::Wip));
 
-        let all_incomplete = TodoStatus { completed: 0, incomplete: 2 };
-        assert_eq!(compute_status_tag(&all_incomplete, false), Some(StatusTag::Todo));
+        let all_incomplete = TodoStatus {
+            completed: 0,
+            incomplete: 2,
+        };
+        assert_eq!(
+            compute_status_tag(&all_incomplete, false),
+            Some(StatusTag::Todo)
+        );
 
-        let archived_mixed = TodoStatus { completed: 1, incomplete: 1 };
-        assert_eq!(compute_status_tag(&archived_mixed, true), Some(StatusTag::Done));
+        let archived_mixed = TodoStatus {
+            completed: 1,
+            incomplete: 1,
+        };
+        assert_eq!(
+            compute_status_tag(&archived_mixed, true),
+            Some(StatusTag::Done)
+        );
     }
 }

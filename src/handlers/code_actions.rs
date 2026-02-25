@@ -3,10 +3,7 @@ use tower_lsp::lsp_types::*;
 use super::diagnostics::DiagnosticData;
 
 /// Build code actions from diagnostics with source "zk-lsp".
-pub fn get_code_actions(
-    uri: &Url,
-    diagnostics: &[Diagnostic],
-) -> Vec<CodeActionOrCommand> {
+pub fn get_code_actions(uri: &Url, diagnostics: &[Diagnostic]) -> Vec<CodeActionOrCommand> {
     let mut actions = Vec::new();
 
     for diag in diagnostics {
@@ -21,7 +18,9 @@ pub fn get_code_actions(
             Some(d) => d,
             None => continue,
         };
-        let Some(ref new_id) = data.new_id else { continue };
+        let Some(ref new_id) = data.new_id else {
+            continue;
+        };
 
         let old_text = format!("@{}", data.old_id);
         let new_text = format!("@{new_id}");
@@ -59,7 +58,10 @@ fn make_replace_action(
         changes: Some(
             [(
                 uri.clone(),
-                vec![TextEdit { range: diag.range, new_text }],
+                vec![TextEdit {
+                    range: diag.range,
+                    new_text,
+                }],
             )]
             .into_iter()
             .collect(),

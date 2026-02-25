@@ -21,8 +21,7 @@ async fn main() -> anyhow::Result<()> {
     // Tracing writes to stderr (stdout reserved for JSON-RPC)
     fmt()
         .with_env_filter(
-            EnvFilter::try_from_env("ZK_LSP_LOG")
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_env("ZK_LSP_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
         .init();
