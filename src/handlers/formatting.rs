@@ -37,8 +37,9 @@ fn apply_tag_edit(content: &str) -> String {
 /// 2. Recompute and apply the note's own status tag based on the updated
 ///    checkbox state.
 pub async fn format_content(content: &str, note_dir: &Path) -> String {
-    let updated = update_ref_checkboxes(content, note_dir).await;
-    apply_tag_edit(&updated)
+    let after_refs = update_ref_checkboxes(content, note_dir).await;
+    let after_nested = update_nested_checkboxes(&after_refs);
+    apply_tag_edit(&after_nested)
 }
 
 /// Returns true iff the note at `path` has an effective tag of `done`.
@@ -112,6 +113,61 @@ async fn update_ref_checkboxes(content: &str, note_dir: &Path) -> String {
     }
     let trailing_newline = content.ends_with('\n');
     let mut out = result.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    out
+}
+
+/// Propagate nested checkbox states bottom-up: if a todo item has children,
+/// its state is derived from them (all `[x]` → `[x]`, any `[ ]` → `[ ]`).
+/// Leaf items are left unchanged.
+fn update_nested_checkboxes(content: &str) -> String {
+    let mut owned_lines: Vec<String> = content.lines().map(str::to_string).collect();
+
+    let todo_items: Vec<(usize, usize)> = owned_lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            if is_todo_line(line) {
+                let indent = line.len() - line.trim_start().len();
+                Some((idx, indent))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for i in (0..todo_items.len()).rev() {
+        let (line_idx, indent) = todo_items[i];
+
+        let mut descendants: Vec<usize> = Vec::new();
+        for j in (i + 1)..todo_items.len() {
+            let (child_line_idx, child_indent) = todo_items[j];
+            if child_indent <= indent {
+                break;
+            }
+            descendants.push(child_line_idx);
+        }
+
+        if descendants.is_empty() {
+            continue;
+        }
+
+        let all_done = descendants
+            .iter()
+            .all(|&child_idx| get_todo_state(&owned_lines[child_idx]) == Some('x'));
+
+        let new_state = if all_done { 'x' } else { ' ' };
+        if get_todo_state(&owned_lines[line_idx]) != Some(new_state) {
+            if let Some(new_line) = replace_todo_state(&owned_lines[line_idx], new_state) {
+                owned_lines[line_idx] = new_line;
+            }
+        }
+    }
+
+    let trailing_newline = content.ends_with('\n');
+    let mut out = owned_lines.join("\n");
     if trailing_newline {
         out.push('\n');
     }
@@ -269,4 +325,69 @@ fn replace_todo_state(line: &str, new_state: char) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_children_done_parent_becomes_checked() {
+        let input = "- [ ] parent\n  - [x] child one\n  - [x] child two\n";
+        let out = update_nested_checkboxes(input);
+        assert_eq!(out, "- [x] parent\n  - [x] child one\n  - [x] child two\n");
+    }
+
+    #[test]
+    fn any_child_incomplete_parent_becomes_unchecked() {
+        let input = "- [x] parent\n  - [x] child one\n  - [ ] child two\n";
+        let out = update_nested_checkboxes(input);
+        assert_eq!(out, "- [ ] parent\n  - [x] child one\n  - [ ] child two\n");
+    }
+
+    #[test]
+    fn three_level_nesting_propagates_to_grandparent() {
+        let input = "- [ ] grandparent\n  - [ ] parent\n    - [x] grandchild\n";
+        let out = update_nested_checkboxes(input);
+        // grandchild done → parent done → grandparent done
+        assert_eq!(
+            out,
+            "- [x] grandparent\n  - [x] parent\n    - [x] grandchild\n"
+        );
+    }
+
+    #[test]
+    fn leaf_items_unchanged() {
+        let input = "- [ ] leaf one\n- [x] leaf two\n";
+        let out = update_nested_checkboxes(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn sibling_groups_resolved_independently() {
+        let input = concat!(
+            "- [ ] group a\n",
+            "  - [x] a child\n",
+            "- [ ] group b\n",
+            "  - [ ] b child\n",
+        );
+        let out = update_nested_checkboxes(input);
+        assert_eq!(
+            out,
+            concat!(
+                "- [x] group a\n",
+                "  - [x] a child\n",
+                "- [ ] group b\n",
+                "  - [ ] b child\n",
+            )
+        );
+    }
+
+    #[test]
+    fn trailing_newline_preserved() {
+        let with_nl = "- [ ] p\n  - [x] c\n";
+        let without_nl = "- [ ] p\n  - [x] c";
+        assert!(update_nested_checkboxes(with_nl).ends_with('\n'));
+        assert!(!update_nested_checkboxes(without_nl).ends_with('\n'));
+    }
 }
