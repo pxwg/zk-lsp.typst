@@ -7,7 +7,7 @@ use tokio::fs;
 use crate::config::WikiConfig;
 use crate::link_gen;
 
-const DEFAULT_METADATA_BLOCK: &str = "#let metadata = toml(bytes(\n \
+const DEFAULT_METADATA_BLOCK: &str = "#let zk-metadata = toml(bytes(\n \
   ```toml\n \
   schema-version = 1\n \
   aliases = []\n \
@@ -37,7 +37,7 @@ async fn build_note_content(id: &str, wiki_root: &std::path::Path) -> String {
     format!(
         "#import \"../include.typ\": *\n\
          {DEFAULT_METADATA_BLOCK}\n\
-         #show: zettel.with(metadata: metadata)\n\
+         #show: zettel.with(metadata: zk-metadata)\n\
          \n\
          =  <{id}>\n"
     )

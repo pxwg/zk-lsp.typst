@@ -95,15 +95,15 @@ pub enum StatusTag {
     Done,
 }
 
-/// Scan `content` for a `#let metadata = toml(bytes(` block.
+/// Scan `content` for a `#let zk-metadata = toml(bytes(` block.
 /// Returns the block's location and extracted TOML string, or None.
 pub fn find_toml_metadata_block(content: &str) -> Option<TomlMetadataBlock> {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find the #let metadata = toml(bytes( line
+    // Find the #let zk-metadata = toml(bytes( line
     let start_line = lines
         .iter()
-        .position(|l| l.trim().starts_with("#let metadata") && l.contains("toml(bytes("))?;
+        .position(|l| l.trim().starts_with("#let zk-metadata") && l.contains("toml(bytes("))?;
 
     // Find the ```toml fence line
     let toml_fence_offset = lines[start_line..]
@@ -367,7 +367,7 @@ pub(crate) mod tests {
 
     const NOTE_TOML_META: &str = concat!(
         "#import \"../include.typ\": *\n",
-        "#let metadata = toml(bytes(\n",
+        "#let zk-metadata = toml(bytes(\n",
         "  ```toml\n",
         "  schema-version = 1\n",
         "  aliases = [\"ZK TOML\"]\n",
@@ -379,14 +379,14 @@ pub(crate) mod tests {
         "  relation-target = []\n",
         "  ```.text,\n",
         "))\n",
-        "#show: zettel.with(metadata: metadata)\n",
+        "#show: zettel.with(metadata: zk-metadata)\n",
         "\n",
         "= TOML Note <2603110000>\n",
     );
 
     const NOTE_TOML_ARCHIVED: &str = concat!(
         "#import \"../include.typ\": *\n",
-        "#let metadata = toml(bytes(\n",
+        "#let zk-metadata = toml(bytes(\n",
         "  ```toml\n",
         "  schema-version = 1\n",
         "  aliases = []\n",
@@ -398,7 +398,7 @@ pub(crate) mod tests {
         "  relation-target = [\"2603110001\"]\n",
         "  ```.text,\n",
         "))\n",
-        "#show: zettel.with(metadata: metadata)\n",
+        "#show: zettel.with(metadata: zk-metadata)\n",
         "\n",
         "= Archived Note <2603110002>\n",
     );

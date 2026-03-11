@@ -16,7 +16,7 @@
 ///
 /// New format (schema-version = 1):
 ///   #import "../include.typ": *
-///   #let metadata = toml(bytes(
+///   #let zk-metadata = toml(bytes(
 ///     ```toml
 ///     schema-version = 1
 ///     aliases = [...]
@@ -213,7 +213,7 @@ pub fn migrate_note(content: &str) -> Option<String> {
     let mut out = String::with_capacity(content.len() + 256);
 
     out.push_str("#import \"../include.typ\": *\n");
-    out.push_str("#let metadata = toml(bytes(\n");
+    out.push_str("#let zk-metadata = toml(bytes(\n");
     out.push_str("  ```toml\n");
     out.push_str("  schema-version = 1\n");
     out.push_str(&format!("  aliases = {}\n", toml_string_array(&aliases)));
@@ -376,7 +376,7 @@ mod tests {
     fn migrate_already_toml_skipped_by_caller() {
         let toml_note = concat!(
             "#import \"../include.typ\": *\n",
-            "#let metadata = toml(bytes(\n",
+            "#let zk-metadata = toml(bytes(\n",
             "  ```toml\n",
             "  schema-version = 1\n",
             "  aliases = []\n",
@@ -388,7 +388,7 @@ mod tests {
             "  relation-target = []\n",
             "  ```.text,\n",
             "))\n",
-            "#show: zettel.with(metadata: metadata)\n",
+            "#show: zettel.with(metadata: zk-metadata)\n",
             "\n",
             "= New Note <2603110000>\n",
         );
