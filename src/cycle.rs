@@ -3,6 +3,9 @@
 /// `detect_cycles` runs Tarjan SCC; `render_cycle_errors` formats results for CLI output.
 /// This module has no I/O and does no parsing; it consumes a `DependencyGraph`.
 use std::collections::{HashMap, HashSet};
+use std::io::IsTerminal;
+
+use unicode_width::UnicodeWidthStr;
 
 use crate::dependency_graph::{CycleEdgeOccurrence, DependencyGraph};
 
@@ -124,36 +127,82 @@ pub fn detect_cycles(graph: &DependencyGraph) -> Vec<DependencyCycle> {
 /// Render Typst-style error messages for all detected cycles (CLI output).
 ///
 /// Column numbers are 1-based byte offsets (not UTF-16; use `byte_to_utf16` for LSP).
+/// ANSI colours are emitted only when stderr is a TTY.
 pub fn render_cycle_errors(cycles: &[DependencyCycle]) -> String {
+    let color = std::io::stderr().is_terminal();
     let mut out = String::new();
     for cycle in cycles {
-        out.push_str("error: cyclic task dependency detected\n");
+        // "error: cyclic task dependency detected"
+        if color {
+            out.push_str("\x1b[1;31merror\x1b[0m\x1b[1m: cyclic task dependency detected\x1b[0m\n");
+        } else {
+            out.push_str("error: cyclic task dependency detected\n");
+        }
+
         for edge in &cycle.edges {
-            let col = edge.byte_start + 1; // 1-based
-            let underline_len = (edge.byte_end - edge.byte_start) as usize;
-            let underline = "^".repeat(underline_len);
+            let col = edge.byte_start + 1; // 1-based byte column
             let path = edge.file_path.display();
             let line_1based = edge.line + 1;
-            out.push('\n');
-            out.push_str(&format!("  --> {path}:{line_1based}:{col}\n"));
-            out.push_str(&format!("   |\n"));
-            out.push_str(&format!(
-                "{line_1based:>3} | {}\n",
-                edge.line_text
-            ));
-            // Align the underline under the @ID token
-            let prefix_spaces = " ".repeat(edge.byte_start as usize);
-            out.push_str(&format!("    | {prefix_spaces}{underline} this dependency participates in a cycle\n"));
+            // Width of the line-number field for padding
+            let lnum_w = format!("{line_1based}").len();
+            let pad = " ".repeat(lnum_w); // spaces matching line-number width
+
+            // Display-column count of the prefix before '@' (accounts for CJK double-width)
+            let prefix_bytes = edge.byte_start as usize;
+            let display_col = display_width(&edge.line_text[..prefix_bytes.min(edge.line_text.len())]);
+            let underline_disp = display_width(
+                &edge.line_text[prefix_bytes..
+                    (edge.byte_end as usize).min(edge.line_text.len())],
+            );
+            let underline = "^".repeat(underline_disp.max(1));
+            let pointer_spaces = " ".repeat(display_col);
+
+            // ┌─ path:line:col
+            if color {
+                out.push_str(&format!(
+                    " \x1b[1;34m{pad}┌─\x1b[0m \x1b[36m{path}:{line_1based}:{col}\x1b[0m\n"
+                ));
+                // blank │
+                out.push_str(&format!(" \x1b[1;34m{pad}│\x1b[0m\n"));
+                // line content
+                out.push_str(&format!(
+                    "\x1b[1;34m{line_1based:>lnum_w$} │\x1b[0m {}\n",
+                    edge.line_text
+                ));
+                // underline
+                out.push_str(&format!(
+                    " \x1b[1;34m{pad}│\x1b[0m {pointer_spaces}\x1b[1;31m{underline}\x1b[0m this dependency participates in a cycle\n"
+                ));
+            } else {
+                out.push_str(&format!(" {pad}┌─ {path}:{line_1based}:{col}\n"));
+                out.push_str(&format!(" {pad}│\n"));
+                out.push_str(&format!("{line_1based:>lnum_w$} │ {}\n", edge.line_text));
+                out.push_str(&format!(
+                    " {pad}│ {pointer_spaces}{underline} this dependency participates in a cycle\n"
+                ));
+            }
         }
+
         // Cycle chain
         let mut chain = cycle.nodes.clone();
         if let Some(first) = chain.first().cloned() {
             chain.push(first);
         }
-        out.push_str(&format!("\ncycle:\n  {}\n", chain.join(" -> ")));
-        out.push('\n');
+        if color {
+            out.push_str(&format!(
+                "\n\x1b[1mcycle\x1b[0m:\n  {}\n\n",
+                chain.join(" \x1b[1;33m->\x1b[0m ")
+            ));
+        } else {
+            out.push_str(&format!("\ncycle:\n  {}\n\n", chain.join(" -> ")));
+        }
     }
     out
+}
+
+/// Count terminal display columns for `s` (CJK chars = 2 columns, others = 1).
+fn display_width(s: &str) -> usize {
+    s.width()
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +277,8 @@ mod tests {
         let cycles = detect_cycles(&graph);
         let rendered = render_cycle_errors(&cycles);
         assert!(rendered.contains("error:"), "should contain error:");
-        assert!(rendered.contains("-->"), "should contain -->");
+        assert!(rendered.contains("┌─"), "should contain ┌─ location marker");
+        assert!(rendered.contains('│'), "should contain │ border");
         assert!(rendered.contains('^'), "should contain ^ underline");
         assert!(rendered.contains("cycle:"), "should contain cycle:");
         assert!(rendered.contains("->"), "should contain -> in cycle chain");
