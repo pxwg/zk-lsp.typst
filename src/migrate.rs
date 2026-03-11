@@ -28,7 +28,7 @@
 ///     relation-target = [...]
 ///     ```.text,
 ///   ))
-///   #show: zettel.with(metadata: metadata)
+///   #show: zettel.with(metadata: zk-metadata)
 ///
 ///   = Title <YYMMDDHHMM>
 ///   #tag.custom           ← non-status/relation tags preserved here
@@ -231,7 +231,7 @@ pub fn migrate_note(content: &str) -> Option<String> {
     ));
     out.push_str("  ```.text,\n");
     out.push_str("))\n");
-    out.push_str("#show: zettel.with(metadata: metadata)\n");
+    out.push_str("#show: zettel.with(metadata: zk-metadata)\n");
     out.push('\n');
     out.push_str(title_line);
     out.push('\n');
@@ -316,8 +316,8 @@ mod tests {
 
         // Body content is preserved.
         assert!(migrated.contains("Some content here. @2602082135"));
-        // #show: zettel.with(metadata: metadata) is present.
-        assert!(migrated.contains("#show: zettel.with(metadata: metadata)"));
+        // #show: zettel.with(metadata: zk-metadata) is present.
+        assert!(migrated.contains("#show: zettel.with(metadata: zk-metadata)"));
         // Old header artefacts are gone.
         assert!(!migrated.contains("/* Metadata:"));
         assert!(!migrated.contains("#tag.archived"));
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(parsed.relation, crate::parser::Relation::Active);
 
         assert!(migrated.contains("Content. @2602082037"));
-        assert!(migrated.contains("#show: zettel.with(metadata: metadata)"));
+        assert!(migrated.contains("#show: zettel.with(metadata: zk-metadata)"));
         assert!(!migrated.contains("#tag.todo"));
     }
 

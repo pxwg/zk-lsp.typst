@@ -35,9 +35,13 @@ pub struct TomlMetadataBlock {
 
 #[derive(Debug, Clone)]
 pub struct ParsedToml {
+    #[allow(dead_code)]
+    pub schema_version: u32,
     pub aliases: Vec<String>,
     pub abstract_text: Option<String>,
     pub keywords: Vec<String>,
+    #[allow(dead_code)]
+    pub generated: bool,
     pub checklist_status: ChecklistStatus,
     pub relation: Relation,
     pub relation_target: Vec<String>,
@@ -46,9 +50,11 @@ pub struct ParsedToml {
 impl Default for ParsedToml {
     fn default() -> Self {
         ParsedToml {
+            schema_version: 1,
             aliases: Vec::new(),
             abstract_text: None,
             keywords: Vec::new(),
+            generated: false,
             checklist_status: ChecklistStatus::None,
             relation: Relation::Active,
             relation_target: Vec::new(),
@@ -135,6 +141,17 @@ pub fn parse_toml_metadata(toml_str: &str) -> Option<ParsedToml> {
     let value: toml::Value = toml_str.parse().ok()?;
     let table = value.as_table()?;
 
+    let schema_version = table
+        .get("schema-version")
+        .and_then(|v| v.as_integer())
+        .map(|n| n as u32)
+        .unwrap_or(1);
+
+    let generated = table
+        .get("generated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let aliases = table
         .get("aliases")
         .and_then(|v| v.as_array())
@@ -193,9 +210,11 @@ pub fn parse_toml_metadata(toml_str: &str) -> Option<ParsedToml> {
         .unwrap_or_default();
 
     Some(ParsedToml {
+        schema_version,
         aliases,
         abstract_text,
         keywords,
+        generated,
         checklist_status,
         relation,
         relation_target,
