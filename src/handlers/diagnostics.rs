@@ -129,6 +129,10 @@ fn extract_toml_string_value(trimmed_line: &str) -> Option<&str> {
     after_eq.strip_prefix('"')?.strip_suffix('"')
 }
 
+fn extract_toml_field_name(trimmed_line: &str) -> Option<&str> {
+    trimmed_line.split_once('=').map(|(field, _)| field.trim())
+}
+
 /// Validate TOML metadata block fields and produce diagnostics.
 pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diagnostic> {
     let lines: Vec<&str> = content.lines().collect();
@@ -198,11 +202,13 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
         let file_line = toml_start + i;
         let file_line_text = lines.get(file_line).copied().unwrap_or("");
         let trimmed = toml_line.trim_start();
-        if let Some((field, _)) = expected_fields
+        if let Some(field_name) = extract_toml_field_name(trimmed) {
+            if let Some((field, _)) = expected_fields
             .iter()
-            .find(|(field, _)| trimmed.starts_with(field))
-        {
-            present_fields.insert(*field, file_line);
+            .find(|(field, _)| *field == field_name)
+            {
+                present_fields.insert(*field, file_line);
+            }
         }
 
         let line_range = Range {
@@ -671,6 +677,33 @@ mod tests {
             .iter()
             .filter(|d| d.message.starts_with("Missing TOML field"))
             .all(|d| d.severity == Some(DiagnosticSeverity::INFORMATION)));
+    }
+
+    #[test]
+    fn test_schema_does_not_flag_existing_relation_target() {
+        let index = make_index();
+        let content = concat!(
+            "#import \"../include.typ\": *\n",
+            "#let zk-metadata = toml(bytes(\n",
+            "  ```toml\n",
+            "  schema-version = 1\n",
+            "  aliases = []\n",
+            "  abstract = \"\"\n",
+            "  keywords = []\n",
+            "  generated = true\n",
+            "  checklist-status = \"done\"\n",
+            "  relation = \"archived\"\n",
+            "  relation-target = [ \"2602082037\" ]\n",
+            "  ```.text,\n",
+            "))\n",
+            "#show: zettel.with(metadata: zk-metadata)\n",
+            "\n",
+            "= Note <2603110000>\n",
+        );
+        let diags = get_schema_diagnostics(content, &index);
+        assert!(!diags
+            .iter()
+            .any(|d| d.message == "Missing TOML field `relation-target`"));
     }
 
     #[test]
