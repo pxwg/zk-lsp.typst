@@ -5,7 +5,7 @@ class ZkLsp < Formula
 
   stable do
     url "https://github.com/pxwg/zk-lsp.typst/archive/refs/tags/v0.3.0.tar.gz"
-    sha256 "PLACEHOLDER_RUN_brew_fetch_TO_OBTAIN"
+    sha256 "b7b61b9e4363fbc89b7ddeec1d500efbd1f46afc96c24c36328e97717f6a9c42"
   end
 
   head "https://github.com/pxwg/zk-lsp.typst.git", branch: "main"
