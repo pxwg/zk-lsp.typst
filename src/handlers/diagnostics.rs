@@ -12,6 +12,7 @@ pub struct DiagnosticData {
     pub kind: String, // "archived" | "legacy"
     pub old_id: String,
     pub new_id: Option<String>,
+    pub replacement: Option<String>,
 }
 
 /// Generate diagnostics for all @ID references in the document content.
@@ -61,6 +62,7 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) ->
                     kind: "archived".into(),
                     old_id: r.id.clone(),
                     new_id: info.alt_id.clone(),
+                    replacement: None,
                 };
                 diagnostics.push(Diagnostic {
                     range,
@@ -96,6 +98,7 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) ->
                         kind: "legacy".into(),
                         old_id: r.id.clone(),
                         new_id: info.evo_id.clone(),
+                        replacement: None,
                     };
                     diagnostics.push(Diagnostic {
                         range,
@@ -143,12 +146,29 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
     let lines: Vec<&str> = content.lines().collect();
     let toml_line_count = block.toml_content.lines().count();
     let toml_start = block.end_line.saturating_sub(toml_line_count);
+    let expected_fields = [
+        ("schema-version", "  schema-version = 1\n"),
+        ("aliases", "  aliases = []\n"),
+        ("abstract", "  abstract = \"\"\n"),
+        ("keywords", "  keywords = []\n"),
+        ("generated", "  generated = true\n"),
+        ("checklist-status", "  checklist-status = \"none\"\n"),
+        ("relation", "  relation = \"active\"\n"),
+        ("relation-target", "  relation-target = []\n"),
+    ];
+    let mut present_fields = std::collections::HashMap::new();
 
     // Per-line field validation
     for (i, toml_line) in block.toml_content.lines().enumerate() {
         let file_line = toml_start + i;
         let file_line_text = lines.get(file_line).copied().unwrap_or("");
         let trimmed = toml_line.trim_start();
+        if let Some((field, _)) = expected_fields
+            .iter()
+            .find(|(field, _)| trimmed.starts_with(field))
+        {
+            present_fields.insert(*field, file_line);
+        }
 
         let line_range = Range {
             start: Position { line: file_line as u32, character: 0 },
@@ -186,6 +206,35 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
                 }
             }
         }
+    }
+
+    for (idx, (field, replacement)) in expected_fields.iter().enumerate() {
+        if present_fields.contains_key(field) {
+            continue;
+        }
+        let insert_line = expected_fields[idx + 1..]
+            .iter()
+            .find_map(|(next_field, _)| present_fields.get(next_field).copied())
+            .unwrap_or(block.end_line);
+        diagnostics.push(Diagnostic {
+            range: Range {
+                start: Position { line: insert_line as u32, character: 0 },
+                end: Position { line: insert_line as u32, character: 0 },
+            },
+            severity: Some(DiagnosticSeverity::INFORMATION),
+            source: Some("zk-lsp".into()),
+            message: format!("Missing TOML field `{field}`"),
+            data: Some(
+                serde_json::to_value(DiagnosticData {
+                    kind: "missing-toml-field".into(),
+                    old_id: (*field).to_string(),
+                    new_id: None,
+                    replacement: Some((*replacement).to_string()),
+                })
+                .unwrap(),
+            ),
+            ..Default::default()
+        });
     }
 
     // Semantic checks using parsed values
@@ -503,6 +552,30 @@ mod tests {
         let content = "- [ ] parent\n  - [ ] child\n";
         let diags = get_checklist_diagnostics(content);
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_schema_missing_fields_produce_info_diagnostics() {
+        let index = make_index();
+        let content = concat!(
+            "#import \"../include.typ\": *\n",
+            "#let zk-metadata = toml(bytes(\n",
+            "  ```toml\n",
+            "  schema-version = 1\n",
+            "  relation = \"active\"\n",
+            "  ```.text,\n",
+            "))\n",
+            "#show: zettel.with(metadata: zk-metadata)\n",
+            "\n",
+            "= Note <2603110000>\n",
+        );
+        let diags = get_schema_diagnostics(content, &index);
+        assert!(diags.iter().any(|d| d.message == "Missing TOML field `aliases`"));
+        assert!(diags.iter().any(|d| d.message == "Missing TOML field `checklist-status`"));
+        assert!(diags
+            .iter()
+            .filter(|d| d.message.starts_with("Missing TOML field"))
+            .all(|d| d.severity == Some(DiagnosticSeverity::INFORMATION)));
     }
 
     #[test]

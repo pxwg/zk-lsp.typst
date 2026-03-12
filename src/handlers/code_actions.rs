@@ -19,6 +19,19 @@ pub fn get_code_actions(uri: &Url, diagnostics: &[Diagnostic]) -> Vec<CodeAction
             Some(d) => d,
             None => continue,
         };
+        if data.kind == "missing-toml-field" {
+            let Some(replacement) = data.replacement.clone() else {
+                continue;
+            };
+            actions.push(make_replace_action(
+                uri,
+                diag,
+                format!("Fix: Add missing TOML field {}", data.old_id),
+                replacement,
+            ));
+            continue;
+        }
+
         let Some(ref new_id) = data.new_id else {
             continue;
         };
@@ -428,6 +441,46 @@ mod tests {
             .unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].new_text, "  relation = \"archived\"");
+    }
+
+    #[test]
+    fn test_code_actions_add_missing_toml_field() {
+        let uri = make_uri();
+        let diagnostic = Diagnostic {
+            range: Range {
+                start: Position { line: 5, character: 0 },
+                end: Position { line: 5, character: 0 },
+            },
+            source: Some("zk-lsp".into()),
+            message: "Missing TOML field `aliases`".into(),
+            data: Some(
+                serde_json::to_value(DiagnosticData {
+                    kind: "missing-toml-field".into(),
+                    old_id: "aliases".into(),
+                    new_id: None,
+                    replacement: Some("  aliases = []\n".into()),
+                })
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        let actions = get_code_actions(&uri, &[diagnostic]);
+        let action = actions.iter().find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca)
+                if ca.title == "Fix: Add missing TOML field aliases" =>
+            {
+                Some(ca)
+            }
+            _ => None,
+        });
+        let edit = action
+            .and_then(|ca| ca.edit.as_ref())
+            .and_then(|e| e.changes.as_ref())
+            .and_then(|c| c.values().next())
+            .and_then(|edits| edits.first())
+            .unwrap();
+        assert_eq!(edit.range.start, edit.range.end);
+        assert_eq!(edit.new_text, "  aliases = []\n");
     }
 }
 
