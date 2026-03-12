@@ -1,33 +1,12 @@
-# zk-lsp
+# zk-lsp: A Typst-based Zettelkasten LSP Server
 
-A standalone Rust LSP server for a Typst-based Zettelkasten wiki.
+A [Rust](https://github.com/rust-lang) [LSP server](https://github.com/microsoft/language-server-protocol) for a [Typst](https://github.com/typst/)-based [Zettelkasten](https://en.wikipedia.org/wiki/Zettelkasten) wiki.
 
-Replaces the Lua/Python automation in `~/wiki` with a single compiled binary that provides:
-
-- **Inlay hints** — `@2602082037` is concealed to `@` and the note title is shown inline via LSP: `@ Note Title`
-- **Diagnostics** — warnings for archived references, info for legacy references, errors for cyclic dependencies
-- **Code actions** — quick-fix to replace or append the successor note ID
-- **References** — find every file that links to the note under the cursor
-- **Tag formatter** — `zk-lsp format` normalizes checkbox states and `checklist-status` tags based on on-disk metadata
-- **Reconcile** — `zk-lsp reconcile` propagates done-states across the whole wiki in a single topological pass
-- **Cycle detection** — cyclic `@ID` task dependencies are a hard error (CLI + LSP diagnostics)
-- **Migration** — `zk-lsp migrate` converts legacy comment-format notes to TOML schema v1
-- **CLI tools** — `generate`, `new`, `remove` for note management without opening Neovim
-- **File watcher** — `link.typ` stays in sync when notes are created or deleted from the terminal
-
-## Requirements
-
-- Rust 1.75+
-- A wiki directory following the structure below (default: `~/wiki`)
+You can build your own personal wiki with Typst's powerful typesetting and templating features, while `zk-lsp` keeps your note graph consistent and provides rich LSP features like inlay hints, diagnostics, and code actions. For more usages, see the [example workflows](#example-usages) section below.
 
 ## Install
 
-```bash
-git clone https://github.com/you/zk-lsp
-cd zk-lsp
-cargo build --release
-ln -sf $(pwd)/target/release/zk-lsp ~/.local/bin/zk-lsp
-```
+See [Install](./INSTALL.md) for detailed instructions.
 
 ## Quick Start
 
