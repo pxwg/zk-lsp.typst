@@ -6,6 +6,7 @@ mod dependency_graph;
 mod graph_check;
 mod handlers;
 mod index;
+mod init;
 mod link_gen;
 mod migrate;
 mod note_ops;
@@ -33,6 +34,17 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // `init` defaults to $PWD, not ~/wiki, so resolve its config before the
+    // shared config (which defaults to ~/wiki for everything else).
+    if matches!(cli.command, Some(Command::Init)) {
+        let root = cli.wiki_root.clone().unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+        let config = WikiConfig::from_root(root);
+        return init::init_wiki(&config).await;
+    }
+
     let config = std::sync::Arc::new(WikiConfig::resolve(cli.wiki_root, None));
 
     match cli.command.unwrap_or(Command::Lsp) {
@@ -75,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
             let out = context_export::export_context(&id, depth, inverse, &config).await?;
             print!("{out}");
         }
+        Command::Init => unreachable!("handled above"),
         Command::Check { no_orphans, no_dead_links } => {
             let mut report = graph_check::check_graph(&config).await?;
             let has_dead_links = !report.dead_links.is_empty();

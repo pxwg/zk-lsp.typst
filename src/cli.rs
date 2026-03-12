@@ -56,4 +56,6 @@ pub enum Command {
         #[arg(long)]
         no_dead_links: bool,
     },
+    /// Initialise a new wiki in the current directory (or --wiki-root)
+    Init,
 }
