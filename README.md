@@ -4,7 +4,7 @@ A standalone Rust LSP server for a Typst-based Zettelkasten wiki.
 
 Replaces the Lua/Python automation in `~/wiki` with a single compiled binary that provides:
 
-- **Inlay hints** — `@2602082037` displays the note title inline
+- **Inlay hints** — `@2602082037` is concealed to `@` and the note title is shown inline via LSP: `@ Note Title`
 - **Diagnostics** — warnings for archived references, info for legacy references, errors for cyclic dependencies
 - **Code actions** — quick-fix to replace or append the successor note ID
 - **References** — find every file that links to the note under the cursor
@@ -174,13 +174,47 @@ If neither file exists, `zk-lsp new` falls back to the built-in default template
 Add to your Neovim config (requires Neovim 0.11+):
 
 ```lua
-vim.lsp.config("zk-lsp", {
+-- lsp/zk-lsp.lua  (Neovim 0.11 lsp/ directory convention)
+return {
   cmd = { "zk-lsp", "lsp" },
   filetypes = { "typst" },
   root_dir = vim.fn.expand("~/wiki"),
-})
-vim.lsp.enable("zk-lsp")
+  offset_encoding = "utf-16",
+}
 ```
+
+```lua
+-- init.lua / options.lua
+vim.lsp.enable("zk-lsp")
+
+-- Enable LSP inlay hints for zk-lsp on every typst buffer
+vim.api.nvim_create_autocmd("LspAttach", {
+  pattern = "*.typ",
+  callback = function(ev)
+    local client = vim.lsp.get_client_by_id(ev.data.client_id)
+    if client and client.name == "zk-lsp" then
+      vim.lsp.inlay_hint.enable(true, { bufnr = ev.buf })
+    end
+  end,
+})
+```
+
+### Inlay hint visual
+
+`@ID` references are rendered in two layers:
+
+1. **Extmark conceal** — `@2602082037` is replaced by a single `@` glyph (requires `conceallevel ≥ 2`)
+2. **LSP inlay hint** — the linked note's title is appended right after the `@` glyph
+
+The combined result looks like:
+
+```
+@ Note Title
+```
+
+where `@` is the concealed ID and `Note Title` is the LSP inlay hint (shown with `InlayHint` highlight).
+
+The server sends `workspace/inlayHint/refresh` once its in-memory index is fully built, so hints appear automatically without requiring a manual buffer reload.
 
 The server advertises these capabilities:
 
@@ -243,7 +277,7 @@ This is the basic use case: you create notes with `zk-lsp new`, write down your 
 - Jump to reference of `<ID>` to quickly find which notes link to the current one
 - (Using [Tinymist LSP](https://github.com/Myriad-Dreamin/tinymist)) to jump to definition of `@ID` references to read the source note without leaving the current context
 - When you delete or move notes around, `zk-lsp generate` keeps `link.typ` up to date with the current note graph
-- Inlay hints show note titles inline, so you can read `@2602082037` as `@2602082037 (Note Title)`
+- Inlay hints show note titles inline: `@2602082037` is concealed to `@ Note Title` (extmark conceal + LSP inlay hint)
 
 ### Life Cycle of a Task Note
 

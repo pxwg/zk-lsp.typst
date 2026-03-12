@@ -117,11 +117,17 @@ impl LanguageServer for ZkLspServer {
         info!("server initialized, building index…");
         let index = Arc::clone(&self.index);
         let config = Arc::clone(&self.config);
-        let _client = self.client.clone();
+        let client = self.client.clone();
 
         tokio::spawn(async move {
             match index.rebuild_full().await {
-                Ok(n) => info!("index built: {n} notes"),
+                Ok(n) => {
+                    info!("index built: {n} notes");
+                    // Tell the client to re-request inlay hints now that the index is ready.
+                    // Ask the client to re-fetch all inlay hints now that the
+                    // index is populated.
+                    let _ = client.inlay_hint_refresh().await;
+                }
                 Err(e) => error!("index build failed: {e}"),
             }
             // Start filesystem watcher
