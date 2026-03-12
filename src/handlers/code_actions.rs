@@ -32,29 +32,42 @@ pub fn get_code_actions(uri: &Url, diagnostics: &[Diagnostic]) -> Vec<CodeAction
             continue;
         }
 
-        let Some(ref new_id) = data.new_id else {
+        let Some(new_ids) = data.new_ids.clone() else {
             continue;
         };
+        if new_ids.is_empty() {
+            continue;
+        }
 
         let old_text = format!("@{}", data.old_id);
-        let new_text = format!("@{new_id}");
-
-        // Action 1: Replace @old with @new
-        actions.push(make_replace_action(
-            uri,
-            diag,
-            format!("Fix: Replace {old_text} with {new_text}"),
-            new_text.clone(),
-        ));
-
-        // Action 2 (legacy only): Append @old @new
-        if data.kind == "legacy" {
+        for new_id in &new_ids {
+            let new_text = format!("@{new_id}");
+            actions.push(make_replace_action(
+                uri,
+                diag,
+                format!("Fix: Replace {old_text} with {new_text}"),
+                new_text.clone(),
+            ));
             let append_text = format!("{old_text} {new_text}");
             actions.push(make_replace_action(
                 uri,
                 diag,
-                format!("Fix: Append new insight ({old_text} {new_text})"),
+                format!("Fix: Keep {old_text} and append {new_text}"),
                 append_text,
+            ));
+        }
+
+        if new_ids.len() > 1 {
+            let all_text = new_ids
+                .iter()
+                .map(|id| format!("@{id}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            actions.push(make_replace_action(
+                uri,
+                diag,
+                format!("Fix: Replace {old_text} with all relation-target IDs"),
+                all_text,
             ));
         }
     }
@@ -457,7 +470,7 @@ mod tests {
                 serde_json::to_value(DiagnosticData {
                     kind: "missing-toml-field".into(),
                     old_id: "aliases".into(),
-                    new_id: None,
+                    new_ids: None,
                     replacement: Some("  aliases = []\n".into()),
                 })
                 .unwrap(),
@@ -481,6 +494,42 @@ mod tests {
             .unwrap();
         assert_eq!(edit.range.start, edit.range.end);
         assert_eq!(edit.new_text, "  aliases = []\n");
+    }
+
+    #[test]
+    fn test_code_actions_offer_all_relation_target_rewrites() {
+        let uri = make_uri();
+        let diagnostic = Diagnostic {
+            range: Range {
+                start: Position { line: 0, character: 6 },
+                end: Position { line: 0, character: 17 },
+            },
+            source: Some("zk-lsp".into()),
+            message: "Note @1111111111 is legacy. New ids: @2222222222, @3333333333".into(),
+            data: Some(
+                serde_json::to_value(DiagnosticData {
+                    kind: "legacy".into(),
+                    old_id: "1111111111".into(),
+                    new_ids: Some(vec!["2222222222".into(), "3333333333".into()]),
+                    replacement: None,
+                })
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        let actions = get_code_actions(&uri, &[diagnostic]);
+        let titles = actions
+            .iter()
+            .filter_map(|a| match a {
+                CodeActionOrCommand::CodeAction(ca) => Some(ca.title.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(titles.contains(&"Fix: Replace @1111111111 with @2222222222"));
+        assert!(titles.contains(&"Fix: Replace @1111111111 with @3333333333"));
+        assert!(titles.contains(&"Fix: Replace @1111111111 with all relation-target IDs"));
+        assert!(titles.contains(&"Fix: Keep @1111111111 and append @2222222222"));
+        assert!(titles.contains(&"Fix: Keep @1111111111 and append @3333333333"));
     }
 }
 

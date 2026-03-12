@@ -11,7 +11,7 @@ use crate::parser;
 pub struct DiagnosticData {
     pub kind: String, // "archived" | "legacy"
     pub old_id: String,
-    pub new_id: Option<String>,
+    pub new_ids: Option<Vec<String>>,
     pub replacement: Option<String>,
 }
 
@@ -55,13 +55,19 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) ->
                     continue;
                 }
                 let mut msg = format!("Note @{} is archived.", r.id);
-                if let Some(ref alt) = info.alt_id {
-                    msg.push_str(&format!(" New version: @{alt}"));
+                if !info.relation_target.is_empty() {
+                    let targets = info
+                        .relation_target
+                        .iter()
+                        .map(|id| format!("@{id}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    msg.push_str(&format!(" New ids: {targets}"));
                 }
                 let data = DiagnosticData {
                     kind: "archived".into(),
                     old_id: r.id.clone(),
-                    new_id: info.alt_id.clone(),
+                    new_ids: Some(info.relation_target.clone()),
                     replacement: None,
                 };
                 diagnostics.push(Diagnostic {
@@ -77,27 +83,28 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) ->
                 if info.relation_target.iter().any(|t| t == note_id) {
                     continue;
                 }
-                // Suppression: if next @token on same line matches evo_id, skip
-                let should_warn = if let Some(ref evo) = info.evo_id {
-                    let after = &line[r.end_char as usize..];
-                    let next_ref = after.trim_start().strip_prefix('@').and_then(|s| {
-                        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-                        Some(&s[..end])
-                    });
-                    next_ref != Some(evo.as_str())
-                } else {
-                    true
-                };
+                // Suppress if the same line already mentions any successor.
+                let after = &line[r.end_char as usize..];
+                let has_successor_on_same_line = parser::find_all_refs(after)
+                    .into_iter()
+                    .any(|next| info.relation_target.iter().any(|id| id == &next.id));
+                let should_warn = !has_successor_on_same_line;
 
                 if should_warn {
                     let mut msg = format!("Note @{} is legacy.", r.id);
-                    if let Some(ref evo) = info.evo_id {
-                        msg.push_str(&format!(" Newer insights: @{evo}"));
+                    if !info.relation_target.is_empty() {
+                        let targets = info
+                            .relation_target
+                            .iter()
+                            .map(|id| format!("@{id}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        msg.push_str(&format!(" New ids: {targets}"));
                     }
                     let data = DiagnosticData {
                         kind: "legacy".into(),
                         old_id: r.id.clone(),
-                        new_id: info.evo_id.clone(),
+                        new_ids: Some(info.relation_target.clone()),
                         replacement: None,
                     };
                     diagnostics.push(Diagnostic {
@@ -228,7 +235,7 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
                 serde_json::to_value(DiagnosticData {
                     kind: "missing-toml-field".into(),
                     old_id: (*field).to_string(),
-                    new_id: None,
+                    new_ids: None,
                     replacement: Some((*replacement).to_string()),
                 })
                 .unwrap(),
@@ -473,6 +480,26 @@ mod tests {
         );
     }
 
+    fn insert_legacy_note(index: &Arc<NoteIndex>, id: &str, targets: &[&str]) {
+        index.notes.insert(
+            id.to_string(),
+            NoteInfo {
+                id: id.to_string(),
+                title: format!("Note {id}"),
+                archived: false,
+                legacy: true,
+                alt_id: targets.first().map(|s| s.to_string()),
+                evo_id: targets.first().map(|s| s.to_string()),
+                relation_target: targets.iter().map(|s| s.to_string()).collect(),
+                aliases: vec![],
+                keywords: vec![],
+                abstract_text: None,
+                checklist_status: None,
+                path: PathBuf::from(format!("/tmp/wiki/note/{id}.typ")),
+            },
+        );
+    }
+
     fn add_backlink(index: &Arc<NoteIndex>, target_id: &str, from_id: &str) {
         index.backlinks.entry(target_id.to_string()).or_default().push(BacklinkLocation {
             file: PathBuf::from(format!("/tmp/wiki/note/{from_id}.typ")),
@@ -576,6 +603,35 @@ mod tests {
             .iter()
             .filter(|d| d.message.starts_with("Missing TOML field"))
             .all(|d| d.severity == Some(DiagnosticSeverity::INFORMATION)));
+    }
+
+    #[test]
+    fn test_legacy_diagnostic_lists_all_relation_targets() {
+        let index = make_index();
+        insert_legacy_note(&index, "1111111111", &["2222222222", "3333333333"]);
+        let diags = get_diagnostics("- [ ] @1111111111\n", &index, "/wiki/note/9999999999.typ");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("@2222222222"));
+        assert!(diags[0].message.contains("@3333333333"));
+        let data: DiagnosticData = serde_json::from_value(diags[0].data.clone().unwrap()).unwrap();
+        assert_eq!(
+            data.new_ids.unwrap(),
+            vec!["2222222222".to_string(), "3333333333".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_legacy_diagnostic_suppressed_if_any_relation_target_already_on_line() {
+        let index = make_index();
+        insert_legacy_note(&index, "1111111111", &["2222222222", "3333333333"]);
+        insert_note(&index, "2222222222");
+        insert_note(&index, "3333333333");
+        let diags = get_diagnostics(
+            "- [ ] @1111111111 @3333333333\n",
+            &index,
+            "/wiki/note/9999999999.typ",
+        );
+        assert!(diags.is_empty());
     }
 
     #[test]
