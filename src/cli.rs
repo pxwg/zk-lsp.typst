@@ -36,4 +36,21 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Export a BFS context document from an entry note (for AI consumption)
+    Export {
+        /// Entry note ID (10-digit YYMMDDHHMM)
+        id: String,
+        /// BFS traversal depth
+        #[arg(long, short, default_value_t = 2)]
+        depth: usize,
+    },
+    /// Check graph integrity: dead links and orphan notes
+    Check {
+        /// Only report dead links (skip orphan check)
+        #[arg(long)]
+        no_orphans: bool,
+        /// Only report orphans (skip dead link check)
+        #[arg(long)]
+        no_dead_links: bool,
+    },
 }

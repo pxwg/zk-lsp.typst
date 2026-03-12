@@ -1,7 +1,9 @@
 mod cli;
 mod config;
+mod context_export;
 mod cycle;
 mod dependency_graph;
+mod graph_check;
 mod handlers;
 mod index;
 mod link_gen;
@@ -68,6 +70,25 @@ async fn main() -> anyhow::Result<()> {
         Command::Reconcile { dry_run } => {
             let stats = reconcile::run_reconcile(&config, dry_run).await?;
             eprintln!("Reconcile: {} file(s) changed", stats.files_changed);
+        }
+        Command::Export { id, depth } => {
+            let out = context_export::export_context(&id, depth, &config).await?;
+            print!("{out}");
+        }
+        Command::Check { no_orphans, no_dead_links } => {
+            let mut report = graph_check::check_graph(&config).await?;
+            let has_dead_links = !report.dead_links.is_empty();
+            if no_dead_links {
+                report.dead_links.clear();
+            }
+            if no_orphans {
+                report.orphans.clear();
+            }
+            let rendered = graph_check::render_check_report(&report);
+            print!("{rendered}");
+            if has_dead_links && !no_dead_links {
+                std::process::exit(1);
+            }
         }
     }
     Ok(())

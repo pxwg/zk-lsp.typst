@@ -58,6 +58,9 @@ impl ZkLspServer {
         let mut diags = diagnostics::get_diagnostics(content, &self.index, uri.path());
         diags.extend(diagnostics::get_cycle_diagnostics(content, &file_path, &cycles));
         diags.extend(diagnostics::get_schema_diagnostics(content, &self.index));
+        if let Some(d) = diagnostics::get_orphan_diagnostic(content, uri.path(), &self.index) {
+            diags.push(d);
+        }
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 }
@@ -320,6 +323,23 @@ impl LanguageServer for ZkLspServer {
                         Ok(()) => info!("deleted note {id}"),
                         Err(e) => error!("delete_note: {e}"),
                     }
+                }
+            }
+            "zk.exportContext" => {
+                let id = params
+                    .arguments
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let depth = params
+                    .arguments
+                    .get(1)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2) as usize;
+                match crate::context_export::export_context(&id, depth, &self.config).await {
+                    Ok(text) => return Ok(Some(Value::String(text))),
+                    Err(e) => error!("exportContext: {e}"),
                 }
             }
             cmd => info!("unhandled command: {cmd}"),

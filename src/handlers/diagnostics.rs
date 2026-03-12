@@ -26,10 +26,6 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) ->
     for (line_num, line) in content.lines().enumerate() {
         let refs = parser::find_all_refs(line);
         for r in refs {
-            let Some(info) = index.get(&r.id) else {
-                continue;
-            };
-
             let range = Range {
                 start: Position {
                     line: line_num as u32,
@@ -39,6 +35,17 @@ pub fn get_diagnostics(content: &str, index: &Arc<NoteIndex>, uri_path: &str) ->
                     line: line_num as u32,
                     character: parser::byte_to_utf16(line, r.end_char as usize),
                 },
+            };
+
+            let Some(info) = index.get(&r.id) else {
+                diagnostics.push(Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("zk-lsp".into()),
+                    message: format!("Note @{} does not exist", r.id),
+                    ..Default::default()
+                });
+                continue;
             };
 
             if info.archived {
@@ -253,6 +260,44 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
     diagnostics
 }
 
+/// Generate a HINT diagnostic for an orphan note (no inbound references).
+///
+/// Returns `None` if:
+/// - The note is not in the index (not a known note file)
+/// - The note has at least one backlink
+pub fn get_orphan_diagnostic(
+    content: &str,
+    uri_path: &str,
+    index: &Arc<NoteIndex>,
+) -> Option<Diagnostic> {
+    let note_id = uri_path.rsplit('/').next().and_then(|s| s.strip_suffix(".typ"))?;
+
+    // Only flag notes that are in the index
+    if index.get(note_id).is_none() {
+        return None;
+    }
+
+    // Not an orphan if it has backlinks
+    if !index.get_backlinks(note_id).is_empty() {
+        return None;
+    }
+
+    // Find the title line (contains `<{note_id}>`)
+    let needle = format!("<{note_id}>");
+    let (line_num, _line_text) = content.lines().enumerate().find(|(_, l)| l.contains(&needle))?;
+
+    Some(Diagnostic {
+        range: Range {
+            start: Position { line: line_num as u32, character: 0 },
+            end: Position { line: line_num as u32, character: 0 },
+        },
+        severity: Some(DiagnosticSeverity::HINT),
+        source: Some("zk-lsp".into()),
+        message: format!("Orphan note: no other notes reference @{note_id}"),
+        ..Default::default()
+    })
+}
+
 /// Generate LSP diagnostics for `@ID` occurrences that participate in cycles.
 ///
 /// Filters `cycles` to only occurrences whose `file_path` matches `file_path`.
@@ -296,9 +341,80 @@ pub fn get_cycle_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::WikiConfig;
     use crate::cycle::DependencyCycle;
     use crate::dependency_graph::CycleEdgeOccurrence;
+    use crate::index::{BacklinkLocation, NoteIndex, NoteInfo};
     use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn make_index() -> Arc<NoteIndex> {
+        let config = Arc::new(WikiConfig::from_root(PathBuf::from("/tmp/wiki")));
+        Arc::new(NoteIndex::new(config))
+    }
+
+    fn insert_note(index: &Arc<NoteIndex>, id: &str) {
+        index.notes.insert(
+            id.to_string(),
+            NoteInfo {
+                id: id.to_string(),
+                title: format!("Note {id}"),
+                archived: false,
+                legacy: false,
+                alt_id: None,
+                evo_id: None,
+                relation_target: vec![],
+                aliases: vec![],
+                keywords: vec![],
+                abstract_text: None,
+                checklist_status: None,
+                path: PathBuf::from(format!("/tmp/wiki/note/{id}.typ")),
+            },
+        );
+    }
+
+    fn add_backlink(index: &Arc<NoteIndex>, target_id: &str, from_id: &str) {
+        index.backlinks.entry(target_id.to_string()).or_default().push(BacklinkLocation {
+            file: PathBuf::from(format!("/tmp/wiki/note/{from_id}.typ")),
+            line: 0,
+            start_char: 0,
+            end_char: 11,
+        });
+    }
+
+    #[test]
+    fn test_dead_link_produces_error() {
+        let index = make_index();
+        // Note 1111111111 is NOT in the index → dead link
+        let content = "- [ ] @1111111111\n";
+        let diags = get_diagnostics(content, &index, "/wiki/note/9999999999.typ");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(diags[0].message.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_orphan_note_produces_hint() {
+        let index = make_index();
+        insert_note(&index, "1111111111");
+        // No backlinks → orphan
+        let content = "= My Note <1111111111>\n";
+        let diag = get_orphan_diagnostic(content, "/wiki/note/1111111111.typ", &index);
+        assert!(diag.is_some());
+        let d = diag.unwrap();
+        assert_eq!(d.severity, Some(DiagnosticSeverity::HINT));
+        assert!(d.message.contains("Orphan note"));
+    }
+
+    #[test]
+    fn test_non_orphan_no_hint() {
+        let index = make_index();
+        insert_note(&index, "1111111111");
+        add_backlink(&index, "1111111111", "2222222222");
+        let content = "= My Note <1111111111>\n";
+        let diag = get_orphan_diagnostic(content, "/wiki/note/1111111111.typ", &index);
+        assert!(diag.is_none());
+    }
 
     #[test]
     fn test_cycle_diagnostic_range() {
