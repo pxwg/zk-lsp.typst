@@ -11,7 +11,7 @@ Rust LSP binary for the `~/wiki` Typst-based Zettelkasten.
 ```bash
 cargo build          # dev build
 cargo build --release
-cargo test           # 39 tests across parser, formatting, migrate, reconcile, cycle
+cargo test           # 51 tests across parser, formatting, migrate, reconcile, cycle, diagnostics, code_actions, completion
 cargo test <name>    # run a single test by name (substring match)
 ```
 
@@ -41,7 +41,9 @@ Notes use the TOML format (primary, created by `zk-lsp new`):
 schema-version = 1
 title = "..."
 tags = [...]
-checklist-status = "none"   # or "active", "done", "archived"
+checklist-status = "none"   # or "todo", "wip", "done"
+relation = "active"         # or "archived", "legacy"
+relation-target = []        # required when relation != "active"
 generated = false
 """))
 #show: zettel
@@ -105,8 +107,9 @@ src/
 ├── watcher.rs            notify-debouncer-mini (300 ms) on note_dir
 └── handlers/
     ├── references.rs    find_references (uses backlink index)
-    ├── diagnostics.rs   archived → Warning, legacy → Info; get_cycle_diagnostics
-    ├── code_actions.rs  replace + append quick-fixes
+    ├── diagnostics.rs   archived/legacy warnings; cycle, schema diagnostics
+    ├── code_actions.rs  quick-fixes + metadata toggle actions (checklist-status, relation)
+    ├── completion.rs    TOML metadata completions (enum values, note IDs, field names)
     ├── inlay_hints.rs   @ID → title after cursor
     └── formatting.rs    willSaveWaitUntil tag edit + cross-file propagation
 ```
@@ -149,10 +152,14 @@ note.done = ∀ leaf_item ∈ items: eval_item_truth(leaf_item) == true
 - `parser::parse_checklist_items(content)` → `Vec<ChecklistItem>` (skips fenced blocks)
 - `parser::eval_item_truth(item, done_lookup)` → bool
 - `parser::compute_note_done_from_items(items, done_lookup)` → bool (leaf-only)
+- `parser::find_all_refs_filtered(content)` → `Vec<RefOccurrence>` (skips TOML block, `/* */` comments, fenced blocks)
 - `dependency_graph::build_dependency_graph(notes)` → `DependencyGraph`
 - `cycle::detect_cycles(graph)` → `Vec<DependencyCycle>`
 - `cycle::render_cycle_errors(cycles)` → `String` (CLI; byte columns, ANSI colour, CJK width)
 - `diagnostics::get_cycle_diagnostics(content, path, cycles)` → `Vec<Diagnostic>` (LSP; UTF-16)
+- `diagnostics::get_schema_diagnostics(content, index)` → `Vec<Diagnostic>` (validates TOML metadata fields)
+- `code_actions::get_metadata_actions(uri, content, range)` → `Vec<CodeActionOrCommand>` (checklist-status toggle, relation switch)
+- `completion::get_completions(content, position, index)` → `Vec<CompletionItem>` (TOML enum values, note IDs, field names)
 
 ## Install
 
