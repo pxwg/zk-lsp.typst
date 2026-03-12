@@ -59,26 +59,24 @@ zk-lsp --help
 
 ---
 
-## Maintainer: updating the formula for a new release
+## Maintainer: releasing a new version
 
-1. Tag the release:
+The GitHub Actions workflow (`.github/workflows/release.yml`) handles everything
+automatically. The only manual steps are:
+
+1. Bump `version` in `Cargo.toml` and commit to `main`.
+
+2. Push a matching tag:
 
    ```bash
    git tag v0.x.0
    git push origin v0.x.0
    ```
 
-2. Obtain the sha256 of the release tarball:
+CI will then:
+- Verify the tag matches `Cargo.toml` and run the test suite.
+- Create a GitHub release with auto-generated notes.
+- Compute the sha256 of the release tarball and commit an updated
+  `Formula/zk-lsp.rb` back to `main` automatically.
 
-   ```bash
-   brew fetch --build-from-source pxwg/zk-lsp/zk-lsp
-   # or manually:
-   curl -sL https://github.com/pxwg/zk-lsp.typst/archive/refs/tags/v0.x.0.tar.gz \
-     | shasum -a 256
-   ```
-
-3. Update `Formula/zk-lsp.rb`:
-   - Bump the version in the `url` line.
-   - Replace `sha256` with the value from step 2.
-
-4. Commit and push — Homebrew users pick up the update on `brew upgrade`.
+Homebrew users pick up the update on the next `brew upgrade`.
