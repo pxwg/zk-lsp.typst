@@ -109,6 +109,54 @@ zk-lsp reconcile
 zk-lsp --wiki-root ~/notes generate
 ```
 
+## Configuration
+
+`zk-lsp` loads configuration from two locations in this order (project overrides user):
+
+| Path | Scope |
+|---|---|
+| `$XDG_CONFIG_HOME/zk-lsp/config.toml` (default: `~/.config/zk-lsp/config.toml`) | User-level |
+| `<wiki-root>/zk-lsp.toml` | Project-level |
+
+### Note template (`zk-lsp new`)
+
+Customize the file created by `zk-lsp new` with a `[new_note]` section. Two placeholders are available:
+
+| Placeholder | Expands to |
+|---|---|
+| `{{id}}` | The 10-digit timestamp ID (`YYMMDDHHMM`) |
+| `{{metadata}}` | The standard TOML metadata block (`#let zk-metadata = toml(bytes(...))`) |
+
+**`~/.config/zk-lsp/config.toml`** (user default):
+
+```toml
+[new_note]
+template = """
+#import "../include.typ": *
+{{metadata}}
+#show: zettel.with(metadata: zk-metadata)
+
+= <{{id}}>
+"""
+```
+
+**`<wiki-root>/zk-lsp.toml`** (project override — e.g. a research wiki with a richer skeleton):
+
+```toml
+[new_note]
+template = """
+#import "../include.typ": *
+{{metadata}}
+#show: zettel.with(metadata: zk-metadata)
+
+= <{{id}}>
+
+== References
+"""
+```
+
+If neither file exists, `zk-lsp new` falls back to the built-in default template.
+
 ## Neovim Integration
 
 Add to your Neovim config (requires Neovim 0.11+):
@@ -184,8 +232,6 @@ Use `--dry-run` to preview changes without writing files.
 
 ## To-Do
 
-- [ ] Workspace symbols for note titles and aliases
-- [ ] `zk.exportContext` command to export a note and its references as Markdown
 - [ ] `zk-lsp init` command to scaffold a basic `include.typ` and `link.typ` if missing
 
 ## License

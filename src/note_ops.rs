@@ -20,19 +20,11 @@ const DEFAULT_METADATA_BLOCK: &str = "#let zk-metadata = toml(bytes(\n \
   ```.text,\n\
 ))";
 
-async fn build_note_content(id: &str, wiki_root: &std::path::Path) -> String {
-    if let Ok(raw) = tokio::fs::read_to_string(wiki_root.join("zk-lsp.toml")).await {
-        if let Ok(table) = raw.parse::<toml::Table>() {
-            if let Some(tmpl) = table
-                .get("new_note")
-                .and_then(|v| v.get("template"))
-                .and_then(|v| v.as_str())
-            {
-                return tmpl
-                    .replace("{{id}}", id)
-                    .replace("{{metadata}}", DEFAULT_METADATA_BLOCK);
-            }
-        }
+fn build_note_content(id: &str, config: &WikiConfig) -> String {
+    if let Some(tmpl) = &config.zk_config.new_note_template {
+        return tmpl
+            .replace("{{id}}", id)
+            .replace("{{metadata}}", DEFAULT_METADATA_BLOCK);
     }
     format!(
         "#import \"../include.typ\": *\n\
@@ -51,7 +43,7 @@ pub async fn create_note(config: &WikiConfig) -> Result<PathBuf> {
 
     let path = config.note_dir.join(format!("{id}.typ"));
     if !path.exists() {
-        let content = build_note_content(&id, &config.root).await;
+        let content = build_note_content(&id, config);
         fs::write(&path, &content)
             .await
             .with_context(|| format!("writing note {}", path.display()))?;
