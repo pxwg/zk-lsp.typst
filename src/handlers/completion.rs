@@ -64,6 +64,7 @@ pub fn get_completions(
                 let info = entry.value();
                 CompletionItem {
                     label: info.id.clone(),
+                    insert_text: Some(info.id.clone()),
                     detail: Some(info.title.clone()),
                     filter_text: Some(format!("{} {}", info.id, info.title)),
                     kind: Some(CompletionItemKind::REFERENCE),
