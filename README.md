@@ -303,6 +303,7 @@ Use `--dry-run` to preview changes without writing files.
 This is the basic use case: you create notes with `zk-lsp new`, write down your thoughts, and link them together with `@ID` references. The LSP features help you navigate and maintain the wiki as it grows:
 - Jump to reference of `<ID>` to quickly find which notes link to the current one
 - (Using [Tinymist LSP](https://github.com/Myriad-Dreamin/tinymist)) to jump to definition of `@ID` references to read the source note without leaving the current context
+- Hovering an ID inside `relation-target = ["..."]` shows a preview of the target note; the preview strips the `zk-metadata` block and starts at the note title so the body is visible in limited hover space
 - When you delete or move notes around, `zk-lsp generate` keeps `link.typ` up to date with the current note graph
 - Inlay hints show note titles inline: `@2602082037` is concealed to `@ Note Title` (extmark conceal + LSP inlay hint)
 
@@ -327,6 +328,7 @@ You can use zettelkasten notes as task management tools by adding checklist entr
   - The action above could be simplified with:
     - A code action on the note to mark it as legacy, archived or active
     - A completion for adding `relation-target` entries that lists note titles for easy linking
+    - A hover preview on each `relation-target` ID that loads the referenced note and shows its content from the title onward, without the TOML metadata block
     - A [Diagnostic](#diagnostics) warning when an archived/legacy note is referenced, and a quick-fix to update the reference to the successor note
 
 Cyclic dependencies of sub-tasks are not allowed: it makes no sense for such configuration:
