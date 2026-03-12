@@ -41,23 +41,24 @@ ln -sf $(pwd)/target/release/zk-lsp ~/.local/bin/zk-lsp
     └── ...
 ```
 
-Each note filename is a 10-digit timestamp (`YYMMDDHHMM`). Notes use the TOML format (created by `zk-lsp new`):
+Each note filename is a 10-digit timestamp (`YYMMDDHHMM`). Notes use the TOML format (created by `zk-lsp new`) to store metadata:
 
-```typst
+`````typst
 #import "../include.typ": *
-#let zk-metadata = toml(bytes("""
+#let zk-metadata = toml(bytes(```
 schema-version = 1
 title = "Note Title"
 tags = []
 checklist-status = "none"   # or "active", "done", "archived"
 generated = false
-"""))
+```))
 #show: zettel
 
 = Note Title <2602082037>
-```
+// Content goes here
+`````
 
-Legacy comment-format notes are read-only. Run `zk-lsp migrate` to convert them to TOML schema v1.
+~Legacy comment-format notes are read-only. Run `zk-lsp migrate` to convert them to TOML schema v1.~
 
 ## CLI
 

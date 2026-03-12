@@ -11,7 +11,7 @@ Rust LSP binary for the `~/wiki` Typst-based Zettelkasten.
 ```bash
 cargo build          # dev build
 cargo build --release
-cargo test           # 60 tests across parser, formatting, migrate, reconcile, cycle, diagnostics, code_actions, completion, graph_check, context_export
+cargo test           # 65 tests across parser, formatting, migrate, reconcile, cycle, diagnostics, code_actions, completion, graph_check, context_export
 cargo test <name>    # run a single test by name (substring match)
 ```
 
@@ -163,6 +163,7 @@ note.done = ∀ leaf_item ∈ items: eval_item_truth(leaf_item) == true
 - `diagnostics::get_cycle_diagnostics(content, path, cycles)` → `Vec<Diagnostic>` (LSP; UTF-16)
 - `diagnostics::get_schema_diagnostics(content, index)` → `Vec<Diagnostic>` (validates TOML metadata fields)
 - `diagnostics::get_orphan_diagnostic(content, uri_path, index)` → `Option<Diagnostic>` (HINT if note has no backlinks)
+- `diagnostics::get_checklist_diagnostics(content)` → `Vec<Diagnostic>` (WARNING if RefItem is non-leaf)
 - `graph_check::check_graph(config)` → `CheckReport` (dead links + orphans across whole wiki)
 - `graph_check::render_check_report(report)` → `String` (Typst-error style CLI output; stdout TTY-aware)
 - `context_export::export_context(entry_id, depth, config)` → `String` (BFS Markdown document)
@@ -188,6 +189,7 @@ note.done = ∀ leaf_item ∈ items: eval_item_truth(leaf_item) == true
 | archived `@ID` | WARNING | referenced note has `relation = "archived"` |
 | legacy `@ID` | INFORMATION | referenced note has `relation = "legacy"` |
 | schema | ERROR/WARNING | invalid TOML field values or missing `relation-target` |
+| non-leaf RefItem | WARNING | `@ID` checklist item has child items; dependency silently ignored |
 
 ## Install
 
