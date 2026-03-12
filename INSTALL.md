@@ -1,17 +1,16 @@
 # Installing zk-lsp
 
-## macOS — Homebrew
+## macOS — Homebrew (pre-built binary, recommended)
 
-This repository doubles as a Homebrew tap. Add it once, then install normally:
+This repository doubles as a Homebrew tap. The formula installs a pre-built
+binary — no Rust toolchain required.
 
 ```bash
 brew tap pxwg/zk-lsp https://github.com/pxwg/zk-lsp.typst
 brew install zk-lsp
 ```
 
-`rust` is listed as a build dependency and will be pulled in automatically if not
-already present. The build compiles from source; expect it to take a minute or two
-on first install.
+Supported: macOS arm64 (Apple Silicon) and x86_64 (Intel).
 
 To upgrade after a new release:
 
@@ -19,15 +18,42 @@ To upgrade after a new release:
 brew upgrade zk-lsp
 ```
 
-To install the latest unreleased commit from `main`:
+---
+
+## cargo-binstall (pre-built binary)
+
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) downloads the
+pre-built binary from GitHub Releases — no compilation needed.
 
 ```bash
-brew install --HEAD pxwg/zk-lsp/zk-lsp
+cargo binstall zk-lsp --git https://github.com/pxwg/zk-lsp.typst
+```
+
+Supported targets: `x86_64-apple-darwin`, `aarch64-apple-darwin`,
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`.
+
+---
+
+## Download binary manually
+
+Pre-built tarballs are attached to every [GitHub Release](https://github.com/pxwg/zk-lsp.typst/releases):
+
+| Target | File |
+|--------|------|
+| macOS Apple Silicon | `zk-lsp-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `zk-lsp-x86_64-apple-darwin.tar.gz` |
+| Linux x86_64 | `zk-lsp-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux arm64 | `zk-lsp-aarch64-unknown-linux-gnu.tar.gz` |
+
+```bash
+# Example: macOS Apple Silicon
+curl -L https://github.com/pxwg/zk-lsp.typst/releases/latest/download/zk-lsp-aarch64-apple-darwin.tar.gz \
+  | tar xz -C ~/.local/bin
 ```
 
 ---
 
-## Linux / other Unix — build from source
+## Build from source
 
 Requires **Rust 1.75+** (`rustup` recommended).
 
@@ -35,11 +61,6 @@ Requires **Rust 1.75+** (`rustup` recommended).
 git clone https://github.com/pxwg/zk-lsp.typst
 cd zk-lsp.typst
 cargo build --release
-```
-
-Then symlink the binary somewhere on your `$PATH`:
-
-```bash
 ln -sf "$(pwd)/target/release/zk-lsp" ~/.local/bin/zk-lsp
 ```
 
@@ -61,9 +82,6 @@ zk-lsp --help
 
 ## Maintainer: releasing a new version
 
-The GitHub Actions workflow (`.github/workflows/release.yml`) handles everything
-automatically. The only manual steps are:
-
 1. Bump `version` in `Cargo.toml` and commit to `main`.
 
 2. Push a matching tag:
@@ -74,9 +92,12 @@ automatically. The only manual steps are:
    ```
 
 CI will then:
-- Verify the tag matches `Cargo.toml` and run the test suite.
-- Create a GitHub release with auto-generated notes.
-- Compute the sha256 of the release tarball and commit an updated
-  `Formula/zk-lsp.rb` back to `main` automatically.
+- Build pre-compiled binaries for all four targets (macOS arm64/x86_64,
+  Linux arm64/x86_64).
+- Run the test suite on native targets (macOS and Linux x86_64).
+- Create a GitHub release and attach all four binary tarballs.
+- Compute sha256 checksums and commit an updated `Formula/zk-lsp.rb` to
+  `main` automatically.
 
-Homebrew users pick up the update on the next `brew upgrade`.
+Homebrew users and `cargo-binstall` users pick up the update on the next
+`brew upgrade` / `cargo binstall`.

@@ -2,18 +2,32 @@ class ZkLsp < Formula
   desc "Zettelkasten LSP server and CLI tools for Typst-based wikis"
   homepage "https://github.com/pxwg/zk-lsp.typst"
   license "AGPL-3.0"
+  version "0.3.0"
 
-  stable do
-    url "https://github.com/pxwg/zk-lsp.typst/archive/refs/tags/v0.3.0.tar.gz"
-    sha256 "b7b61b9e4363fbc89b7ddeec1d500efbd1f46afc96c24c36328e97717f6a9c42"
+  on_macos do
+    on_arm do
+      url "https://github.com/pxwg/zk-lsp.typst/releases/download/v0.3.0/zk-lsp-aarch64-apple-darwin.tar.gz"
+      sha256 "PLACEHOLDER_ARM_DARWIN"
+    end
+    on_intel do
+      url "https://github.com/pxwg/zk-lsp.typst/releases/download/v0.3.0/zk-lsp-x86_64-apple-darwin.tar.gz"
+      sha256 "PLACEHOLDER_X86_DARWIN"
+    end
   end
 
-  head "https://github.com/pxwg/zk-lsp.typst.git", branch: "main"
-
-  depends_on "rust" => :build
+  on_linux do
+    on_arm do
+      url "https://github.com/pxwg/zk-lsp.typst/releases/download/v0.3.0/zk-lsp-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "PLACEHOLDER_ARM_LINUX"
+    end
+    on_intel do
+      url "https://github.com/pxwg/zk-lsp.typst/releases/download/v0.3.0/zk-lsp-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "PLACEHOLDER_X86_LINUX"
+    end
+  end
 
   def install
-    system "cargo", "install", *std_cargo_args
+    bin.install "zk-lsp"
   end
 
   test do

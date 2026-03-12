@@ -5,7 +5,58 @@ on:
     tags: ['v*']
 
 jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install aarch64 Linux cross-linker
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Run tests (native targets only)
+        if: '!matrix.cross'
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../zk-lsp-${{ matrix.target }}.tar.gz zk-lsp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zk-lsp-${{ matrix.target }}
+          path: zk-lsp-${{ matrix.target }}.tar.gz
+
   release:
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -13,12 +64,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so we can push back to main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
 
       - name: Verify tag matches Cargo.toml version
         run: |
@@ -29,39 +76,91 @@ jobs:
             exit 1
           fi
 
-      - name: Run tests
-        run: cargo test
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zk-lsp-*
+          merge-multiple: true
 
-      - name: Create GitHub release
+      - name: Create GitHub release with binary assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --generate-notes
+            --generate-notes \
+            zk-lsp-x86_64-apple-darwin.tar.gz \
+            zk-lsp-aarch64-apple-darwin.tar.gz \
+            zk-lsp-x86_64-unknown-linux-gnu.tar.gz \
+            zk-lsp-aarch64-unknown-linux-gnu.tar.gz
+
+      - name: Compute sha256 checksums
+        id: sha
+        run: |
+          echo "x86_darwin=$(shasum -a 256 zk-lsp-x86_64-apple-darwin.tar.gz | awk '{print $1}')"         >> $GITHUB_OUTPUT
+          echo "arm_darwin=$(shasum -a 256 zk-lsp-aarch64-apple-darwin.tar.gz | awk '{print $1}')"       >> $GITHUB_OUTPUT
+          echo "x86_linux=$(shasum -a 256 zk-lsp-x86_64-unknown-linux-gnu.tar.gz | awk '{print $1}')"   >> $GITHUB_OUTPUT
+          echo "arm_linux=$(shasum -a 256 zk-lsp-aarch64-unknown-linux-gnu.tar.gz | awk '{print $1}')"  >> $GITHUB_OUTPUT
 
       - name: Update Homebrew formula
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          SHA_X86_DARWIN: ${{ steps.sha.outputs.x86_darwin }}
+          SHA_ARM_DARWIN: ${{ steps.sha.outputs.arm_darwin }}
+          SHA_X86_LINUX: ${{ steps.sha.outputs.x86_linux }}
+          SHA_ARM_LINUX: ${{ steps.sha.outputs.arm_linux }}
         run: |
-          TAG="${{ github.ref_name }}"
-          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          python3 << 'EOF'
+          import os, textwrap
 
-          # Retry until GitHub makes the tarball available (usually immediate)
-          for i in $(seq 1 10); do
-            SHA256=$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}')
-            [ -n "$SHA256" ] && break
-            echo "Attempt $i: tarball not ready, retrying in 5s…"
-            sleep 5
-          done
+          tag  = os.environ['TAG']
+          repo = os.environ['REPO']
+          ver  = tag.lstrip('v')
+          base = f"https://github.com/{repo}/releases/download/{tag}"
 
-          if [ -z "$SHA256" ]; then
-            echo "ERROR: could not fetch tarball after retries"
-            exit 1
-          fi
+          formula = textwrap.dedent(f"""\
+            class ZkLsp < Formula
+              desc "Zettelkasten LSP server and CLI tools for Typst-based wikis"
+              homepage "https://github.com/{repo}"
+              license "AGPL-3.0"
+              version "{ver}"
 
-          sed -i "s|url \"https://github.com.*\.tar\.gz\"|url \"${URL}\"|" Formula/zk-lsp.rb
-          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/zk-lsp.rb
+              on_macos do
+                on_arm do
+                  url "{base}/zk-lsp-aarch64-apple-darwin.tar.gz"
+                  sha256 "{os.environ['SHA_ARM_DARWIN']}"
+                end
+                on_intel do
+                  url "{base}/zk-lsp-x86_64-apple-darwin.tar.gz"
+                  sha256 "{os.environ['SHA_X86_DARWIN']}"
+                end
+              end
+
+              on_linux do
+                on_arm do
+                  url "{base}/zk-lsp-aarch64-unknown-linux-gnu.tar.gz"
+                  sha256 "{os.environ['SHA_ARM_LINUX']}"
+                end
+                on_intel do
+                  url "{base}/zk-lsp-x86_64-unknown-linux-gnu.tar.gz"
+                  sha256 "{os.environ['SHA_X86_LINUX']}"
+                end
+              end
+
+              def install
+                bin.install "zk-lsp"
+              end
+
+              test do
+                assert_match "zk-lsp", shell_output("\#{bin}/zk-lsp --help")
+              end
+            end
+          """)
+
+          with open('Formula/zk-lsp.rb', 'w') as f:
+              f.write(formula)
+          EOF
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
