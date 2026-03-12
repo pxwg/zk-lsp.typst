@@ -7,7 +7,7 @@ use tower_lsp::{Client, LanguageServer};
 use tracing::{error, info};
 
 use crate::config::WikiConfig;
-use crate::handlers::{code_actions, diagnostics, inlay_hints, references};
+use crate::handlers::{code_actions, completion, diagnostics, inlay_hints, references};
 use crate::index::NoteIndex;
 use crate::{cycle, dependency_graph, link_gen, note_ops, watcher};
 
@@ -57,6 +57,7 @@ impl ZkLspServer {
         let file_path = uri.to_file_path().unwrap_or_default();
         let mut diags = diagnostics::get_diagnostics(content, &self.index, uri.path());
         diags.extend(diagnostics::get_cycle_diagnostics(content, &file_path, &cycles));
+        diags.extend(diagnostics::get_schema_diagnostics(content, &self.index));
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 }
@@ -83,6 +84,11 @@ impl LanguageServer for ZkLspServer {
                 )),
                 references_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec!["\"".into(), "=".into(), "[".into()]),
+                    resolve_provider: Some(false),
+                    ..Default::default()
+                }),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
@@ -207,9 +213,31 @@ impl LanguageServer for ZkLspServer {
     // -----------------------------------------------------------------------
 
     async fn code_action(&self, params: CodeActionParams) -> LspResult<Option<CodeActionResponse>> {
-        let actions =
-            code_actions::get_code_actions(&params.text_document.uri, &params.context.diagnostics);
+        let uri = &params.text_document.uri;
+        let content = uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        let mut actions = code_actions::get_code_actions(uri, &params.context.diagnostics);
+        actions.extend(code_actions::get_metadata_actions(uri, &content, params.range));
         Ok(Some(actions))
+    }
+
+    // -----------------------------------------------------------------------
+    // Completion
+    // -----------------------------------------------------------------------
+
+    async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let content = uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        let items = completion::get_completions(&content, position, &self.index);
+        Ok(if items.is_empty() { None } else { Some(CompletionResponse::Array(items)) })
     }
 
     // -----------------------------------------------------------------------

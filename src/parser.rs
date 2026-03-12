@@ -70,6 +70,7 @@ pub struct NoteHeader {
     pub legacy: bool,
     pub alt_id: Option<String>,
     pub evo_id: Option<String>,
+    pub relation_target: Vec<String>,
     pub aliases: Vec<String>,
     pub abstract_text: Option<String>,
     pub keywords: Vec<String>,
@@ -272,6 +273,7 @@ pub fn parse_header(content: &str) -> Option<NoteHeader> {
         legacy,
         alt_id,
         evo_id,
+        relation_target: parsed.relation_target.clone(),
         aliases: parsed.aliases,
         abstract_text: parsed.abstract_text,
         keywords: parsed.keywords,
@@ -446,6 +448,116 @@ pub fn find_all_refs(content: &str) -> Vec<RefOccurrence> {
             });
         }
     }
+    refs
+}
+
+/// Find all @ID occurrences in content, skipping:
+/// - TOML metadata block lines
+/// - Block comments (`/* ... */`, including multi-line)
+/// - Fenced code blocks (``` ... ```)
+pub fn find_all_refs_filtered(content: &str) -> Vec<RefOccurrence> {
+    let mut refs = Vec::new();
+
+    let toml_range = find_toml_metadata_block(content).map(|b| b.start_line..=b.end_line);
+
+    let mut in_block_comment = false;
+    let mut in_fence = false;
+
+    for (line_num, line) in content.lines().enumerate() {
+        // Skip TOML metadata block lines
+        if let Some(ref range) = toml_range {
+            if range.contains(&line_num) {
+                continue;
+            }
+        }
+
+        // Handle block comment continuation
+        if in_block_comment {
+            if let Some(end_offset) = line.find("*/") {
+                in_block_comment = false;
+                // Process visible content after end of block comment
+                // by falling through with adjusted pos below
+                let after_offset = end_offset + 2;
+                let mut visible_segments: Vec<(usize, usize)> = Vec::new();
+                let mut pos = after_offset;
+                loop {
+                    let remaining = &line[pos..];
+                    if let Some(bc_start) = remaining.find("/*") {
+                        visible_segments.push((pos, pos + bc_start));
+                        let bc_abs = pos + bc_start;
+                        if let Some(end_off) = line[bc_abs + 2..].find("*/") {
+                            pos = bc_abs + 2 + end_off + 2;
+                        } else {
+                            in_block_comment = true;
+                            break;
+                        }
+                    } else {
+                        visible_segments.push((pos, line.len()));
+                        break;
+                    }
+                }
+                for (seg_start, seg_end) in visible_segments {
+                    let segment = &line[seg_start..seg_end];
+                    for cap in RE_ID_REF.captures_iter(segment) {
+                        let m = cap.get(0).unwrap();
+                        let id_m = cap.get(1).unwrap();
+                        refs.push(RefOccurrence {
+                            id: id_m.as_str().to_string(),
+                            line: line_num as u32,
+                            start_char: (seg_start + m.start()) as u32,
+                            end_char: (seg_start + m.end()) as u32,
+                        });
+                    }
+                }
+            }
+            // Whether we found */ or not, move to next line
+            continue;
+        }
+
+        // Fence toggle (only when not in block comment)
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+
+        // Normal line: scan for block comment boundaries and collect visible segments
+        let mut visible_segments: Vec<(usize, usize)> = Vec::new();
+        let mut pos = 0;
+        loop {
+            let remaining = &line[pos..];
+            if let Some(bc_start) = remaining.find("/*") {
+                visible_segments.push((pos, pos + bc_start));
+                let bc_abs = pos + bc_start;
+                if let Some(end_off) = line[bc_abs + 2..].find("*/") {
+                    pos = bc_abs + 2 + end_off + 2;
+                } else {
+                    in_block_comment = true;
+                    break;
+                }
+            } else {
+                visible_segments.push((pos, line.len()));
+                break;
+            }
+        }
+
+        for (seg_start, seg_end) in visible_segments {
+            let segment = &line[seg_start..seg_end];
+            for cap in RE_ID_REF.captures_iter(segment) {
+                let m = cap.get(0).unwrap();
+                let id_m = cap.get(1).unwrap();
+                refs.push(RefOccurrence {
+                    id: id_m.as_str().to_string(),
+                    line: line_num as u32,
+                    start_char: (seg_start + m.start()) as u32,
+                    end_char: (seg_start + m.end()) as u32,
+                });
+            }
+        }
+    }
+
     refs
 }
 
@@ -624,6 +736,49 @@ pub(crate) mod tests {
         } else {
             panic!("expected Ref kind");
         }
+    }
+
+    #[test]
+    fn test_find_refs_skips_block_comment() {
+        let content = "see @2602082037\n/* skip @9999999999 */\nand @2602082106\n";
+        let refs = find_all_refs_filtered(content);
+        let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"2602082037"));
+        assert!(ids.contains(&"2602082106"));
+        assert!(!ids.contains(&"9999999999"), "ID in block comment must be skipped");
+    }
+
+    #[test]
+    fn test_find_refs_skips_toml_block() {
+        let content = concat!(
+            "#import \"../include.typ\": *\n",
+            "#let zk-metadata = toml(bytes(\n",
+            "  ```toml\n",
+            "  relation-target = [\"2603110001\"]\n",
+            "  ```.text,\n",
+            "))\n",
+            "#show: zettel.with(metadata: zk-metadata)\n",
+            "\n",
+            "= Test <2603110000>\n",
+            "\n",
+            "See @2603110002\n",
+        );
+        let refs = find_all_refs_filtered(content);
+        let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
+        // ID inside TOML block should be skipped
+        assert!(!ids.contains(&"2603110001"), "ID in TOML block must be skipped");
+        // ID in regular content should be found
+        assert!(ids.contains(&"2603110002"));
+    }
+
+    #[test]
+    fn test_find_refs_skips_fenced_block() {
+        let content = "before @1111111111\n```\n@2222222222\n```\nafter @3333333333\n";
+        let refs = find_all_refs_filtered(content);
+        let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"1111111111"));
+        assert!(!ids.contains(&"2222222222"), "ID in fenced block must be skipped");
+        assert!(ids.contains(&"3333333333"));
     }
 
     #[test]
