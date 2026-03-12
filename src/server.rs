@@ -338,7 +338,12 @@ impl LanguageServer for ZkLspServer {
                     .get(1)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(2) as usize;
-                match crate::context_export::export_context(&id, depth, &self.config).await {
+                let inverse = params
+                    .arguments
+                    .get(2)
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                match crate::context_export::export_context(&id, depth, inverse, &self.config).await {
                     Ok(text) => return Ok(Some(Value::String(text))),
                     Err(e) => error!("exportContext: {e}"),
                 }

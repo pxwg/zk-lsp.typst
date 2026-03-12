@@ -71,8 +71,8 @@ async fn main() -> anyhow::Result<()> {
             let stats = reconcile::run_reconcile(&config, dry_run).await?;
             eprintln!("Reconcile: {} file(s) changed", stats.files_changed);
         }
-        Command::Export { id, depth } => {
-            let out = context_export::export_context(&id, depth, &config).await?;
+        Command::Export { id, depth, inverse } => {
+            let out = context_export::export_context(&id, depth, inverse, &config).await?;
             print!("{out}");
         }
         Command::Check { no_orphans, no_dead_links } => {

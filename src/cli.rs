@@ -43,6 +43,9 @@ pub enum Command {
         /// BFS traversal depth
         #[arg(long, short, default_value_t = 2)]
         depth: usize,
+        /// Traverse inbound links instead of outgoing; output ancestors first, entry last
+        #[arg(long, default_value_t = false)]
+        inverse: bool,
     },
     /// Check graph integrity: dead links and orphan notes
     Check {
