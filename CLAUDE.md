@@ -27,7 +27,7 @@ zk-lsp remove <ID> [--wiki-root PATH]  # delete note + remove from link.typ
 zk-lsp format                       # read note from stdin, write formatted to stdout
 zk-lsp migrate [--wiki-root PATH]   # migrate legacy comment-format notes to TOML schema v1
 zk-lsp reconcile [--wiki-root PATH] [--dry-run]  # reconcile cross-file checkbox states
-zk-lsp export <ID> [--depth N]      # BFS context export to Markdown (default depth: 2)
+zk-lsp export <ID> [--depth N] [--inverse]  # BFS context export to Markdown (default depth: 2; --inverse follows backlinks, ancestors first)
 zk-lsp check [--no-orphans] [--no-dead-links]  # graph integrity: dead links + orphans; exits 1 on dead links
 ```
 
@@ -166,7 +166,7 @@ note.done = ∀ leaf_item ∈ items: eval_item_truth(leaf_item) == true
 - `diagnostics::get_checklist_diagnostics(content)` → `Vec<Diagnostic>` (WARNING if RefItem is non-leaf)
 - `graph_check::check_graph(config)` → `CheckReport` (dead links + orphans across whole wiki)
 - `graph_check::render_check_report(report)` → `String` (Typst-error style CLI output; stdout TTY-aware)
-- `context_export::export_context(entry_id, depth, config)` → `String` (BFS Markdown document)
+- `context_export::export_context(entry_id, depth, inverse, config)` → `String` (BFS/inverse Markdown document; `inverse=true` follows backlinks, reverses output)
 - `code_actions::get_metadata_actions(uri, content, range)` → `Vec<CodeActionOrCommand>` (checklist-status toggle, relation switch)
 - `completion::get_completions(content, position, index)` → `Vec<CompletionItem>` (TOML enum values, note IDs, field names)
 
@@ -177,7 +177,7 @@ note.done = ∀ leaf_item ∈ items: eval_item_truth(leaf_item) == true
 | `zk.newNote` | — | — |
 | `zk.removeNote` | `id: string` | — |
 | `zk.generateLinkTyp` | — | — |
-| `zk.exportContext` | `id: string, depth?: number` | `string` (Markdown) |
+| `zk.exportContext` | `id: string, depth?: number, inverse?: bool` | `string` (Markdown) |
 
 ## Diagnostics Summary
 

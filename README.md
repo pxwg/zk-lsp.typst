@@ -73,6 +73,8 @@ Commands:
   format     Read a note from stdin, write formatted content to stdout
   migrate    Migrate legacy comment-format notes to TOML schema v1
   reconcile  Reconcile cross-file checkbox states across the whole wiki
+  export     Export a BFS context document for AI consumption
+  check      Check graph integrity: dead links and orphan notes
 
 Options:
   --wiki-root <PATH>   Override the wiki root directory
@@ -104,6 +106,16 @@ zk-lsp migrate
 # Propagate done-states across the wiki (dry run first)
 zk-lsp reconcile --dry-run
 zk-lsp reconcile
+
+# Export context for AI: forward BFS (entry note first, deps follow)
+zk-lsp export 2602082037 --depth 3
+
+# Export context for AI: inverse BFS (ancestors first, entry note last)
+zk-lsp export 2602082037 --depth 3 --inverse
+
+# Check graph integrity (exits 1 on dead links)
+zk-lsp check
+zk-lsp check --no-orphans
 
 # Use a non-default wiki directory
 zk-lsp --wiki-root ~/notes generate
@@ -182,11 +194,12 @@ The server advertises these capabilities:
 
 ### Commands exposed via `executeCommand`
 
-| Command | Effect |
-|---|---|
-| `zk.newNote` | Create a note and notify with its URI |
-| `zk.removeNote` | Delete a note (arg: note ID string) |
-| `zk.generateLinkTyp` | Regenerate `link.typ` |
+| Command | Arguments | Effect |
+|---|---|---|
+| `zk.newNote` | — | Create a note and notify with its URI |
+| `zk.removeNote` | `id: string` | Delete a note |
+| `zk.generateLinkTyp` | — | Regenerate `link.typ` |
+| `zk.exportContext` | `id: string, depth?: number, inverse?: bool` | Return a Markdown context document; `inverse=true` lists ancestors first |
 
 ## Diagnostics
 
