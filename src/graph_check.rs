@@ -64,10 +64,15 @@ pub async fn check_graph(config: &WikiConfig) -> anyhow::Result<CheckReport> {
 
     let mut dead_links = Vec::new();
     let mut referenced_ids: HashSet<String> = HashSet::new();
+    // notes that have at least one outgoing ref
+    let mut has_outgoing: HashSet<String> = HashSet::new();
 
     for (from_id, (from_path, content)) in &notes {
         let lines: Vec<&str> = content.lines().collect();
         let refs = parser::find_all_refs_filtered(content);
+        if !refs.is_empty() {
+            has_outgoing.insert(from_id.clone());
+        }
         for r in refs {
             referenced_ids.insert(r.id.clone());
             if !notes.contains_key(&r.id) {
@@ -90,9 +95,10 @@ pub async fn check_graph(config: &WikiConfig) -> anyhow::Result<CheckReport> {
         a.from_id.cmp(&b.from_id).then(a.line.cmp(&b.line)).then(a.byte_start.cmp(&b.byte_start))
     });
 
+    // Orphan: no inbound references AND no outgoing references
     let mut orphans: Vec<OrphanEntry> = notes
         .iter()
-        .filter(|(id, _)| !referenced_ids.contains(*id))
+        .filter(|(id, _)| !referenced_ids.contains(*id) && !has_outgoing.contains(*id))
         .map(|(id, (path, _))| OrphanEntry {
             id: id.clone(),
             path: path.clone(),
@@ -162,7 +168,7 @@ pub fn render_check_report(report: &CheckReport) -> String {
     for entry in &report.orphans {
         if color {
             out.push_str(
-                "\x1b[1;33mwarning\x1b[0m\x1b[1m: orphan note (no inbound references)\x1b[0m\n",
+                "\x1b[1;33mwarning\x1b[0m\x1b[1m: orphan note (no inbound or outgoing references)\x1b[0m\n",
             );
             out.push_str(&format!(
                 " \x1b[1;34m┌─\x1b[0m \x1b[36m{}\x1b[0m\n",
@@ -173,7 +179,7 @@ pub fn render_check_report(report: &CheckReport) -> String {
                 entry.id, entry.title
             ));
         } else {
-            out.push_str("warning: orphan note (no inbound references)\n");
+            out.push_str("warning: orphan note (no inbound or outgoing references)\n");
             out.push_str(&format!(" ┌─ {}\n", entry.path.display()));
             out.push_str(&format!(" │  {} — \"{}\"\n", entry.id, entry.title));
         }
@@ -221,10 +227,14 @@ mod tests {
     fn build_report(notes: &HashMap<String, (PathBuf, String)>) -> CheckReport {
         let mut dead_links = Vec::new();
         let mut referenced_ids: HashSet<String> = HashSet::new();
+        let mut has_outgoing: HashSet<String> = HashSet::new();
 
         for (from_id, (from_path, content)) in notes {
             let lines: Vec<&str> = content.lines().collect();
             let refs = parser::find_all_refs_filtered(content);
+            if !refs.is_empty() {
+                has_outgoing.insert(from_id.clone());
+            }
             for r in refs {
                 referenced_ids.insert(r.id.clone());
                 if !notes.contains_key(&r.id) {
@@ -245,7 +255,7 @@ mod tests {
 
         let mut orphans: Vec<OrphanEntry> = notes
             .iter()
-            .filter(|(id, _)| !referenced_ids.contains(*id))
+            .filter(|(id, _)| !referenced_ids.contains(*id) && !has_outgoing.contains(*id))
             .map(|(id, (path, _))| OrphanEntry {
                 id: id.clone(),
                 path: path.clone(),
@@ -279,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_check_detects_orphan() {
-        // B is not referenced by anyone → orphan
+        // Both notes have no inbound or outgoing refs → both orphans
         let notes = make_notes(&[
             ("1111111111", "no refs here\n"),
             ("2222222222", "no refs here\n"),
@@ -289,15 +299,26 @@ mod tests {
     }
 
     #[test]
-    fn test_check_no_false_orphan() {
-        // A references B → B is not an orphan
+    fn test_check_no_false_orphan_inbound() {
+        // A references B → B has inbound link, not orphan
+        // A has outgoing link, not orphan
         let notes = make_notes(&[
             ("1111111111", "- [ ] @2222222222\n"),
             ("2222222222", ""),
         ]);
         let report = build_report(&notes);
-        // 1111111111 is not referenced → orphan; 2222222222 is referenced → not orphan
-        assert_eq!(report.orphans.len(), 1);
-        assert_eq!(report.orphans[0].id, "1111111111");
+        // neither is an orphan: 1111111111 has outgoing, 2222222222 has inbound
+        assert!(report.orphans.is_empty());
+    }
+
+    #[test]
+    fn test_check_orphan_outgoing_only_not_orphan() {
+        // A references nobody, B references A → A has inbound (not orphan), B has outgoing (not orphan)
+        let notes = make_notes(&[
+            ("1111111111", "no refs\n"),
+            ("2222222222", "- [ ] @1111111111\n"),
+        ]);
+        let report = build_report(&notes);
+        assert!(report.orphans.is_empty());
     }
 }

@@ -260,11 +260,13 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
     diagnostics
 }
 
-/// Generate a HINT diagnostic for an orphan note (no inbound references).
+/// Generate a HINT diagnostic for an orphan note.
 ///
-/// Returns `None` if:
-/// - The note is not in the index (not a known note file)
-/// - The note has at least one backlink
+/// A note is orphan only when BOTH conditions hold:
+/// 1. No other note references it (no backlinks in the index)
+/// 2. It has no outgoing `@ID` references itself
+///
+/// Returns `None` if the note is not in the index or is not fully isolated.
 pub fn get_orphan_diagnostic(
     content: &str,
     uri_path: &str,
@@ -277,8 +279,13 @@ pub fn get_orphan_diagnostic(
         return None;
     }
 
-    // Not an orphan if it has backlinks
+    // Not an orphan if it has inbound links
     if !index.get_backlinks(note_id).is_empty() {
+        return None;
+    }
+
+    // Not an orphan if it has outgoing links
+    if !parser::find_all_refs_filtered(content).is_empty() {
         return None;
     }
 
@@ -293,7 +300,7 @@ pub fn get_orphan_diagnostic(
         },
         severity: Some(DiagnosticSeverity::HINT),
         source: Some("zk-lsp".into()),
-        message: format!("Orphan note: no other notes reference @{note_id}"),
+        message: format!("Orphan note: no inbound or outbound @ID references"),
         ..Default::default()
     })
 }
@@ -397,7 +404,7 @@ mod tests {
     fn test_orphan_note_produces_hint() {
         let index = make_index();
         insert_note(&index, "1111111111");
-        // No backlinks → orphan
+        // No backlinks, no outgoing refs → orphan
         let content = "= My Note <1111111111>\n";
         let diag = get_orphan_diagnostic(content, "/wiki/note/1111111111.typ", &index);
         assert!(diag.is_some());
@@ -407,11 +414,22 @@ mod tests {
     }
 
     #[test]
-    fn test_non_orphan_no_hint() {
+    fn test_non_orphan_no_hint_inbound() {
         let index = make_index();
         insert_note(&index, "1111111111");
         add_backlink(&index, "1111111111", "2222222222");
+        // Has inbound backlink → not orphan
         let content = "= My Note <1111111111>\n";
+        let diag = get_orphan_diagnostic(content, "/wiki/note/1111111111.typ", &index);
+        assert!(diag.is_none());
+    }
+
+    #[test]
+    fn test_non_orphan_no_hint_outgoing() {
+        let index = make_index();
+        insert_note(&index, "1111111111");
+        // No backlinks, but note has outgoing ref → not orphan
+        let content = "= My Note <1111111111>\n- [ ] @2222222222\n";
         let diag = get_orphan_diagnostic(content, "/wiki/note/1111111111.typ", &index);
         assert!(diag.is_none());
     }
