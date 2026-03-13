@@ -14,12 +14,14 @@
 ---@field span Span
 
 ---@class Checkbox
----@field id       string    "local:{line}:{indent}" for local items; first target_id for ref items
+---@field id       string    "local:{line_idx}" for local items; first target_id for ref items
 ---@field kind     string    "local" | "ref"
 ---@field checked  boolean
 ---@field targets  string[]  Target note IDs (empty for local items)
 ---@field text     string    Checkbox body text (after `- [x] `)
 ---@field span     Span      Full-line span
+---@field line_idx integer   0-based line index of this checkbox within the note
+---@field indent   integer   Number of leading spaces (indentation level)
 
 ---@class Heading
 ---@field level  integer  Heading level (1 = `=`, 2 = `==`, …)

@@ -1,130 +1,209 @@
--- Hook: local nested checkbox propagation + checklist-status update
+-- Hook: nested checkbox propagation + checklist-status update
 --
--- Local items participate in nested parent propagation.
--- Ref items do NOT participate in parent propagation, but they DO contribute
--- to checklist-status as ordinary observed checklist entries.
+-- Requires each checkbox to expose:
+--   cb.line_idx : integer
+--   cb.indent   : integer
+--
+-- Semantics:
+--   1. All checkboxes (local/ref) participate in the same indentation tree.
+--   2. If a checkbox has children, its effective checked state is determined
+--      solely by whether all children are checked.
+--   3. If a checkbox is a leaf, its effective checked state is its observed checked state.
+--   4. checklist-status is computed from all leaf checkboxes after propagation.
 --
 -- No cross-file information is read here.
-local function get_state(checkbox)
-  return checkbox.checked and "x" or " "
-end
 
---- Build a flat list of local tree items for nested propagation only.
-local function tree_items(checkboxes)
-  local items = {}
-  for _, cb in ipairs(checkboxes) do
-    if cb.kind == "local" then
-      -- Parse line_idx and indent from id: "local:{line_idx}:{indent}"
-      local line_idx, indent = cb.id:match("^local:(%d+):(%d+)$")
-      if line_idx then
-        table.insert(items, {
-          line_idx = tonumber(line_idx),
-          indent = tonumber(indent),
-          checked = cb.checked,
-          span = cb.span,
-          cb = cb,
-        })
-      end
-    end
-  end
-  return items
-end
+---@class Span
+---@field start_byte integer
+---@field end_byte integer
+---@field start_line integer
+---@field start_col integer
+---@field end_line integer
+---@field end_col integer
 
---- Build a flat list of items that contribute to checklist-status.
---- Local items are included; ref items are also included as observed leaves.
-local function status_items(checkboxes, propagated_tree_items)
-  local items = {}
-  -- Keep propagated local items first, so parent state changes are reflected.
-  for _, item in ipairs(propagated_tree_items) do
-    table.insert(items, item)
-  end
-  -- Add ref items as leaf observations.
+---@class Checkbox
+---@field id string
+---@field kind '"local"'|'"ref"'
+---@field checked boolean
+---@field targets string[]
+---@field text string
+---@field span Span
+---@field line_idx integer
+---@field indent integer
+
+---@class HookNode
+---@field cb Checkbox
+---@field line_idx integer
+---@field indent integer
+---@field observed_checked boolean
+---@field effective_checked boolean
+---@field parent HookNode|nil
+---@field children HookNode[]
+
+local M = {}
+
+---@param checkboxes Checkbox[]
+---@return HookNode[]
+local function build_nodes(checkboxes)
+  local nodes = {}
+
   for _, cb in ipairs(checkboxes) do
-    if cb.kind == "ref" then
-      table.insert(items, {
-        line_idx = nil,
-        indent = nil,
-        checked = cb.checked,
-        span = cb.span,
+    if cb.line_idx ~= nil and cb.indent ~= nil then
+      table.insert(nodes, {
         cb = cb,
-        is_ref = true,
+        line_idx = cb.line_idx,
+        indent = cb.indent,
+        observed_checked = cb.checked,
+        effective_checked = cb.checked,
+        parent = nil,
+        children = {},
       })
     end
   end
-  return items
+
+  table.sort(nodes, function(a, b)
+    if a.line_idx ~= b.line_idx then
+      return a.line_idx < b.line_idx
+    end
+    return a.indent < b.indent
+  end)
+
+  return nodes
 end
 
---- Propagate bottom-up: if item has children, its state = all children done.
---- Returns a list of edits (only for items whose state changed).
-local function propagate(items)
-  local edits = {}
-  -- Work from last to first so parents see updated children
-  for i = #items, 1, -1 do
-    local item = items[i]
-    -- Find direct children: next items with strictly greater indent
-    -- until we hit an item with indent <= item.indent
-    local children = {}
-    for j = i + 1, #items do
-      if items[j].indent <= item.indent then
+---@param nodes HookNode[]
+---@return HookNode[]
+local function build_tree(nodes)
+  local roots = {}
+  local stack = {}
+
+  for _, node in ipairs(nodes) do
+    while #stack > 0 and stack[#stack].indent >= node.indent do
+      table.remove(stack)
+    end
+
+    if #stack == 0 then
+      table.insert(roots, node)
+    else
+      local parent = stack[#stack]
+      node.parent = parent
+      table.insert(parent.children, node)
+    end
+
+    table.insert(stack, node)
+  end
+
+  return roots
+end
+
+---@param node HookNode
+---@return string
+local function observed_state_char(node)
+  return node.observed_checked and "x" or " "
+end
+
+---@param node HookNode
+---@return string
+local function effective_state_char(node)
+  return node.effective_checked and "x" or " "
+end
+
+---@param node HookNode
+---@return integer
+local function state_byte(node)
+  -- same convention as before:
+  -- "- [ ] ..." => state char at start_byte + indent + 3
+  return node.cb.span.start_byte + node.indent + 3
+end
+
+---@param edits table[]
+---@param node HookNode
+local function emit_edit_if_needed(edits, node)
+  local old_char = observed_state_char(node)
+  local new_char = effective_state_char(node)
+  if old_char ~= new_char then
+    local b = state_byte(node)
+    table.insert(edits, {
+      start_byte = b,
+      end_byte = b + 1,
+      text = new_char,
+    })
+  end
+end
+
+---@param node HookNode
+---@param edits table[]
+local function propagate_node(node, edits)
+  for _, child in ipairs(node.children) do
+    propagate_node(child, edits)
+  end
+
+  if #node.children > 0 then
+    local all_done = true
+    for _, child in ipairs(node.children) do
+      if not child.effective_checked then
+        all_done = false
         break
       end
-      table.insert(children, items[j])
     end
-    if #children > 0 then
-      local all_done = true
-      for _, child in ipairs(children) do
-        if not child.checked then
-          all_done = false
-          break
-        end
-      end
+    node.effective_checked = all_done
+  else
+    node.effective_checked = node.observed_checked
+  end
 
-      local new_state = all_done and "x" or " "
-      if get_state(item) ~= new_state then
-        -- Update in-memory state for parent propagation
-        item.checked = all_done
+  emit_edit_if_needed(edits, node)
+end
 
-        -- Compute byte offset of the state character: start_byte + indent + 3
-        local state_byte = item.span.start_byte + item.indent + 3
-        table.insert(edits, {
-          start_byte = state_byte,
-          end_byte = state_byte + 1,
-          text = new_state,
-        })
-      end
-    end
+---@param roots HookNode[]
+---@return table[]
+local function propagate_tree(roots)
+  local edits = {}
+  for _, root in ipairs(roots) do
+    propagate_node(root, edits)
   end
   return edits
 end
 
---- Compute checklist-status from leaf local items plus ref items.
-local function compute_status(items)
-  local leaves = {}
-  for i, item in ipairs(items) do
-    if item.is_ref then
-      table.insert(leaves, item)
-    else
-      local is_leaf = true
-      if i < #items and items[i + 1].indent and item.indent and items[i + 1].indent > item.indent then
-        is_leaf = false
-      end
-      if is_leaf then
-        table.insert(leaves, item)
-      end
-    end
+---@param node HookNode
+---@param leaves HookNode[]
+local function collect_leaves(node, leaves)
+  if #node.children == 0 then
+    table.insert(leaves, node)
+    return
   end
+  for _, child in ipairs(node.children) do
+    collect_leaves(child, leaves)
+  end
+end
+
+---@param roots HookNode[]
+---@return HookNode[]
+local function leaf_nodes(roots)
+  local leaves = {}
+  for _, root in ipairs(roots) do
+    collect_leaves(root, leaves)
+  end
+  return leaves
+end
+
+---@param leaves HookNode[]
+---@return string|nil
+local function compute_status(leaves)
   if #leaves == 0 then
     return nil
   end
+
   local all_done = true
   local any_done = false
+
   for _, leaf in ipairs(leaves) do
-    if leaf.checked then
+    if leaf.effective_checked then
       any_done = true
     else
       all_done = false
     end
   end
+
   if all_done then
     return "done"
   elseif any_done then
@@ -134,17 +213,24 @@ local function compute_status(items)
   end
 end
 
+---@param note table
+---@return table
 function run(note)
-  local tree = tree_items(note.checkboxes)
-  local edits = propagate(tree)
-  local items = status_items(note.checkboxes, tree)
-  local status = compute_status(items)
-  if #items == 0 then
+  local nodes = build_nodes(note.checkboxes)
+  if #nodes == 0 then
     return {}
   end
+
+  local roots = build_tree(nodes)
+  local edits = propagate_tree(roots)
+  local leaves = leaf_nodes(roots)
+  local status = compute_status(leaves)
+
   local result = { edits = edits }
-  if status then
-    result.metadata = { ["checklist-status"] = status }
+  if status ~= nil then
+    result.metadata = {
+      ["checklist-status"] = status,
+    }
   end
   return result
 end

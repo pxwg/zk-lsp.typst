@@ -21,7 +21,7 @@ pub struct HookTitle {
 /// A checklist item (local `- [ ]` or ref `- [ ] @ID`).
 #[derive(Debug, Clone)]
 pub struct HookCheckbox {
-    /// "local:{line_idx}:{indent}" for LocalItem; first target_id for RefItem.
+    /// Stable identifier: "local:{line_idx}" for LocalItem; first target_id for RefItem.
     pub id: String,
     /// "local" or "ref"
     pub kind: String,
@@ -30,6 +30,10 @@ pub struct HookCheckbox {
     pub targets: Vec<String>,
     pub text: String,
     pub span: HookSpan,
+    /// 0-based line index of this checkbox within the note.
+    pub line_idx: usize,
+    /// Number of leading spaces (indentation level).
+    pub indent: usize,
 }
 
 /// A heading in the note (level 1 = `=`, level 2 = `==`, etc.)

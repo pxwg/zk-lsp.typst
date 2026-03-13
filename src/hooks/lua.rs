@@ -110,12 +110,14 @@ pub fn build_hook_note_input(content: &str) -> HookNoteInput {
             let span = span_for_line(&line_offsets, item.line_idx, line_len);
             match &item.kind {
                 ChecklistItemKind::Local => HookCheckbox {
-                    id: format!("local:{}:{}", item.line_idx, item.indent),
+                    id: format!("local:{}", item.line_idx),
                     kind: "local".to_string(),
                     checked: item.checked,
                     targets: Vec::new(),
                     text: item.text.clone(),
                     span,
+                    line_idx: item.line_idx,
+                    indent: item.indent,
                 },
                 ChecklistItemKind::Ref { targets } => {
                     let first_id = targets
@@ -131,6 +133,8 @@ pub fn build_hook_note_input(content: &str) -> HookNoteInput {
                         targets: target_ids,
                         text: item.text.clone(),
                         span,
+                        line_idx: item.line_idx,
+                        indent: item.indent,
                     }
                 }
             }
@@ -241,6 +245,8 @@ fn note_input_to_lua(lua: &Lua, input: &HookNoteInput) -> anyhow::Result<mlua::T
         cbt.set("checked", cb.checked)?;
         cbt.set("text", cb.text.as_str())?;
         cbt.set("span", span_to_lua(lua, &cb.span)?)?;
+        cbt.set("line_idx", cb.line_idx)?;
+        cbt.set("indent", cb.indent)?;
         let targets = lua.create_table()?;
         for (j, tgt) in cb.targets.iter().enumerate() {
             targets.set(j + 1, tgt.as_str())?;
@@ -449,6 +455,125 @@ mod tests {
         } else {
             panic!("expected a string value");
         }
+    }
+
+    #[test]
+    fn test_checkbox_line_idx_and_indent_accessible_in_lua() {
+        // Single flat checkbox — verify line_idx and indent are reachable from Lua.
+        let body = "- [ ] a task\n";
+        let note = make_toml_note("Test", "2601010010", "none", "active", body);
+        let runner = HookRunner::load_str(
+            r#"function run(n)
+                 local cb = n.checkboxes[1]
+                 return { metadata = {
+                   ["checklist-status"] = tostring(cb.line_idx) .. ":" .. tostring(cb.indent)
+                 } }
+               end"#,
+        )
+        .unwrap();
+        let input = build_hook_note_input(&note);
+        let result = runner.run(&input).unwrap();
+        if let Some(toml::Value::String(s)) = result.metadata.get("checklist-status") {
+            let parts: Vec<&str> = s.splitn(2, ':').collect();
+            assert_eq!(parts.len(), 2);
+            let line_idx: usize = parts[0].parse().expect("line_idx should be an integer");
+            let indent: usize = parts[1].parse().expect("indent should be an integer");
+            // The checkbox is on the body line; there are header lines above it.
+            assert!(line_idx > 0, "checkbox should not be on line 0 (header is above)");
+            assert_eq!(indent, 0, "top-level checkbox has zero indent");
+        } else {
+            panic!("expected string metadata value");
+        }
+    }
+
+    #[test]
+    fn test_checkbox_line_idx_order_and_indent_nested() {
+        // Three checkboxes: parent at indent=0, two children at indent=2.
+        // Verify line_idx is strictly increasing and indent values are correct.
+        let body = "- [ ] parent\n  - [ ] child one\n  - [x] child two\n";
+        let note = make_toml_note("Test", "2601010011", "none", "active", body);
+        let input = build_hook_note_input(&note);
+
+        assert_eq!(input.checkboxes.len(), 3, "expected 3 checkboxes");
+
+        // line_idx strictly increasing
+        assert!(
+            input.checkboxes[0].line_idx < input.checkboxes[1].line_idx,
+            "parent line_idx < first child line_idx"
+        );
+        assert!(
+            input.checkboxes[1].line_idx < input.checkboxes[2].line_idx,
+            "first child line_idx < second child line_idx"
+        );
+
+        // indent: parent=0, children=2
+        assert_eq!(input.checkboxes[0].indent, 0, "parent indent");
+        assert_eq!(input.checkboxes[1].indent, 2, "child one indent");
+        assert_eq!(input.checkboxes[2].indent, 2, "child two indent");
+    }
+
+    #[test]
+    fn test_checkbox_indent_enables_tree_reconstruction_in_lua() {
+        // Scenario from the task spec:
+        //   - [x] @xxx      ← ref item, checked
+        //     - [ ]         ← local child, unchecked
+        // A Lua hook with access to line_idx+indent can detect that the child
+        // is unchecked and should propagate upward to uncheck the parent.
+        // This test verifies the runtime supplies enough info (correct indent/line_idx)
+        // for that logic, using a Lua script that performs the propagation.
+        let body = "- [x] @1234567890\n  - [ ] subtask\n";
+        let note = make_toml_note("Test", "2601010012", "none", "active", body);
+
+        let lua_script = r#"
+function run(n)
+  local cbs = n.checkboxes
+  -- Build parent map: for each cb, find the nearest preceding cb with smaller indent
+  local parent = {}
+  for i = 1, #cbs do
+    for j = i - 1, 1, -1 do
+      if cbs[j].indent < cbs[i].indent then
+        parent[i] = j
+        break
+      end
+    end
+  end
+
+  -- Propagate upward: if any child is unchecked, uncheck its parent
+  local should_uncheck = {}
+  for i = 1, #cbs do
+    if not cbs[i].checked then
+      local p = parent[i]
+      while p do
+        should_uncheck[p] = true
+        p = parent[p]
+      end
+    end
+  end
+
+  local edits = {}
+  for i, cb in ipairs(cbs) do
+    if should_uncheck[i] and cb.checked then
+      -- Replace '[x]' with '[ ]' at the checkbox position
+      local s = n.content:sub(cb.span.start_byte + 1, cb.span.end_byte)
+      local new_s = s:gsub("%[x%]", "[ ]", 1)
+      if new_s ~= s then
+        table.insert(edits, { start_byte = cb.span.start_byte, end_byte = cb.span.end_byte, text = new_s })
+      end
+    end
+  end
+  return { edits = edits }
+end
+"#;
+        let runner = HookRunner::load_str(lua_script).unwrap();
+        let input = build_hook_note_input(&note);
+        let result = runner.run(&input).unwrap();
+
+        // The hook should have emitted an edit unchecking the parent ref item.
+        assert_eq!(result.edits.len(), 1, "expected one edit to uncheck the parent");
+        assert!(
+            result.edits[0].text.contains("[ ]"),
+            "edit should replace [x] with [ ]"
+        );
     }
 
     #[test]
