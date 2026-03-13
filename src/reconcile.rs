@@ -445,4 +445,448 @@ mod tests {
         }
         assert_eq!(changed, 0, "second round should produce no changes");
     }
+
+    fn make_toml_note_full(
+        title: &str,
+        id: &str,
+        status: &str,
+        relation: &str,
+        relation_target: &[&str],
+        body: &str,
+    ) -> String {
+        let targets = relation_target
+            .iter()
+            .map(|t| format!("\"{t}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "#import \"../include.typ\": *\n\
+             #let zk-metadata = toml(bytes(\n\
+             \x20 ```toml\n\
+             \x20 schema-version = 1\n\
+             \x20 title = \"{title}\"\n\
+             \x20 tags = []\n\
+             \x20 checklist-status = \"{status}\"\n\
+             \x20 relation = \"{relation}\"\n\
+             \x20 relation-target = [{targets}]\n\
+             \x20 generated = false\n\
+             \x20 ```.text,\n\
+             ))\n\
+             #show: zettel.with(metadata: zk-metadata)\n\
+             \n\
+             = {title} <{id}>\n\
+             {body}"
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 1: First-line checklist
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn first_line_checklist_not_forced_done() {
+        let content = make_toml_note("A", "1100000001", "none", "- [ ] task\n");
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()));
+    }
+
+    #[test]
+    fn first_line_checklist_done_when_checked() {
+        let content = make_toml_note("A", "1100000002", "none", "- [x] task\n");
+        assert!(is_note_done_with_deps(&content, &HashMap::new()));
+    }
+
+    #[test]
+    fn first_line_ref_checklist_evaluates_dep() {
+        let content = make_toml_note("A", "1100000003", "none", "- [ ] @9900000001\n");
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()));
+        let deps_done = HashMap::from([("9900000001".to_string(), true)]);
+        assert!(is_note_done_with_deps(&content, &deps_done));
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 2: Nested checklist semantics
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nested_local_all_children_done() {
+        // Parent is non-leaf; only children (leaves) count
+        let body = "- [ ] parent\n  - [x] child1\n  - [x] child2\n";
+        let content = make_toml_note("A", "1200000001", "none", body);
+        assert!(is_note_done_with_deps(&content, &HashMap::new()), "all leaves checked → done");
+    }
+
+    #[test]
+    fn nested_local_one_child_incomplete() {
+        let body = "- [ ] parent\n  - [x] child1\n  - [ ] child2\n";
+        let content = make_toml_note("A", "1200000002", "none", body);
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()), "one leaf unchecked → not done");
+    }
+
+    #[test]
+    fn nested_ref_child_drives_parent_truth() {
+        // Ref leaf under a local parent: ref dep decides truth
+        let body = "- [ ] parent\n  - [ ] @9900000002\n";
+        let content = make_toml_note("A", "1200000003", "none", body);
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()));
+        let deps = HashMap::from([("9900000002".to_string(), true)]);
+        assert!(is_note_done_with_deps(&content, &deps));
+    }
+
+    #[test]
+    fn three_level_nesting_only_leaves_count() {
+        // grandparent → parent → two leaf children (all done)
+        let body = "- [ ] gp\n  - [ ] parent\n    - [x] leaf1\n    - [x] leaf2\n";
+        let content = make_toml_note("A", "1200000004", "none", body);
+        assert!(is_note_done_with_deps(&content, &HashMap::new()));
+    }
+
+    #[test]
+    fn three_level_one_leaf_unchecked() {
+        let body = "- [ ] gp\n  - [ ] parent\n    - [x] leaf1\n    - [ ] leaf2\n";
+        let content = make_toml_note("A", "1200000005", "none", body);
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 3: Sub-task dependency pattern
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn refitem_child_of_local_parent() {
+        // "- [ ] task B\n  - [ ] @taskA" — Ref is a leaf
+        let body = "- [ ] task B\n  - [ ] @9900000003\n";
+        let content = make_toml_note("B", "1300000001", "none", body);
+        let deps_done = HashMap::from([("9900000003".to_string(), true)]);
+        assert!(is_note_done_with_deps(&content, &deps_done));
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()));
+    }
+
+    #[test]
+    fn refitem_child_normalize_updates_checkbox() {
+        let body = "- [ ] task B\n  - [ ] @9900000004\n";
+        let content = make_toml_note("B", "1300000002", "none", body);
+        let deps = HashMap::from([("9900000004".to_string(), true)]);
+        let result = normalize_note(&content, &deps);
+        // The ref child checkbox should be updated to [x]
+        assert!(result.contains("- [x] @9900000004"), "ref child updated to [x]");
+    }
+
+    #[test]
+    fn refitem_child_normalize_not_done() {
+        let body = "- [ ] task B\n  - [ ] @9900000005\n";
+        let content = make_toml_note("B", "1300000003", "none", body);
+        let deps = HashMap::from([("9900000005".to_string(), false)]);
+        let result = normalize_note(&content, &deps);
+        assert!(result.contains("- [ ] @9900000005"), "ref child stays [ ] when dep not done");
+    }
+
+    #[test]
+    fn mixed_local_and_ref_children() {
+        // Local child done, Ref child not done → note not done
+        let body = "- [ ] parent\n  - [x] local child\n  - [ ] @9900000006\n";
+        let content = make_toml_note("B", "1300000004", "none", body);
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()), "ref leaf not done → not done");
+        let deps = HashMap::from([("9900000006".to_string(), true)]);
+        assert!(is_note_done_with_deps(&content, &deps), "both leaves done → done");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 4: DAG with nested structures
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dag_nested_subtask_chain() {
+        // A: has all checked items (done); B: "- [ ] task\n  - [ ] @A"; C: depends on B
+        let content_a = make_toml_note("A", "1400000001", "none", "- [x] item\n");
+        let content_b = make_toml_note("B", "1400000002", "none",
+            "- [ ] task\n  - [ ] @1400000001\n");
+        let content_c = make_toml_note("C", "1400000003", "none", "- [ ] @1400000002\n");
+
+        let mut notes = HashMap::new();
+        notes.insert("1400000001".to_string(),
+            NoteRec { path: PathBuf::from("1400000001.typ"), content: content_a });
+        notes.insert("1400000002".to_string(),
+            NoteRec { path: PathBuf::from("1400000002.typ"), content: content_b });
+        notes.insert("1400000003".to_string(),
+            NoteRec { path: PathBuf::from("1400000003.typ"), content: content_c });
+
+        let note_map: HashMap<String, (PathBuf, String)> = notes
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph = dependency_graph::build_dependency_graph(&note_map);
+        let cycles = cycle::detect_cycles(&graph);
+        assert!(cycles.is_empty());
+
+        let global = evaluate_dag(&notes, &graph.adj);
+        assert!(global.get("1400000001").copied().unwrap_or(false), "A done");
+        assert!(global.get("1400000002").copied().unwrap_or(false), "B done");
+        assert!(global.get("1400000003").copied().unwrap_or(false), "C done");
+    }
+
+    #[test]
+    fn dag_nested_subtask_chain_incomplete() {
+        // A has unchecked item → all cascade to false
+        let content_a = make_toml_note("A", "1400000004", "none", "- [ ] item\n");
+        let content_b = make_toml_note("B", "1400000005", "none",
+            "- [ ] task\n  - [ ] @1400000004\n");
+        let content_c = make_toml_note("C", "1400000006", "none", "- [ ] @1400000005\n");
+
+        let mut notes = HashMap::new();
+        notes.insert("1400000004".to_string(),
+            NoteRec { path: PathBuf::from("1400000004.typ"), content: content_a });
+        notes.insert("1400000005".to_string(),
+            NoteRec { path: PathBuf::from("1400000005.typ"), content: content_b });
+        notes.insert("1400000006".to_string(),
+            NoteRec { path: PathBuf::from("1400000006.typ"), content: content_c });
+
+        let note_map: HashMap<String, (PathBuf, String)> = notes
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph = dependency_graph::build_dependency_graph(&note_map);
+        let global = evaluate_dag(&notes, &graph.adj);
+        assert!(!global.get("1400000004").copied().unwrap_or(false), "A not done");
+        assert!(!global.get("1400000005").copied().unwrap_or(false), "B not done");
+        assert!(!global.get("1400000006").copied().unwrap_or(false), "C not done");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 5: Diamond dependency
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diamond_all_done() {
+        // D done → B and C both depend on D → A depends on B and C
+        let content_d = make_toml_note("D", "1500000001", "done", "");
+        let content_b = make_toml_note("B", "1500000002", "none", "- [ ] @1500000001\n");
+        let content_c = make_toml_note("C", "1500000003", "none", "- [ ] @1500000001\n");
+        let content_a = make_toml_note("A", "1500000004", "none",
+            "- [ ] @1500000002\n- [ ] @1500000003\n");
+
+        let mut notes = HashMap::new();
+        notes.insert("1500000001".to_string(),
+            NoteRec { path: PathBuf::from("1500000001.typ"), content: content_d });
+        notes.insert("1500000002".to_string(),
+            NoteRec { path: PathBuf::from("1500000002.typ"), content: content_b });
+        notes.insert("1500000003".to_string(),
+            NoteRec { path: PathBuf::from("1500000003.typ"), content: content_c });
+        notes.insert("1500000004".to_string(),
+            NoteRec { path: PathBuf::from("1500000004.typ"), content: content_a });
+
+        let note_map: HashMap<String, (PathBuf, String)> = notes
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph = dependency_graph::build_dependency_graph(&note_map);
+        let cycles = cycle::detect_cycles(&graph);
+        assert!(cycles.is_empty());
+
+        let global = evaluate_dag(&notes, &graph.adj);
+        assert!(global.get("1500000001").copied().unwrap_or(false), "D done");
+        assert!(global.get("1500000002").copied().unwrap_or(false), "B done");
+        assert!(global.get("1500000003").copied().unwrap_or(false), "C done");
+        assert!(global.get("1500000004").copied().unwrap_or(false), "A done");
+    }
+
+    #[test]
+    fn diamond_one_branch_incomplete() {
+        // C has an extra unchecked item → A not done
+        let content_d = make_toml_note("D", "1500000005", "done", "");
+        let content_b = make_toml_note("B", "1500000006", "none", "- [ ] @1500000005\n");
+        let content_c = make_toml_note("C", "1500000007", "none",
+            "- [ ] @1500000005\n- [ ] extra task\n");
+        let content_a = make_toml_note("A", "1500000008", "none",
+            "- [ ] @1500000006\n- [ ] @1500000007\n");
+
+        let mut notes = HashMap::new();
+        notes.insert("1500000005".to_string(),
+            NoteRec { path: PathBuf::from("1500000005.typ"), content: content_d });
+        notes.insert("1500000006".to_string(),
+            NoteRec { path: PathBuf::from("1500000006.typ"), content: content_b });
+        notes.insert("1500000007".to_string(),
+            NoteRec { path: PathBuf::from("1500000007.typ"), content: content_c });
+        notes.insert("1500000008".to_string(),
+            NoteRec { path: PathBuf::from("1500000008.typ"), content: content_a });
+
+        let note_map: HashMap<String, (PathBuf, String)> = notes
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph = dependency_graph::build_dependency_graph(&note_map);
+        let global = evaluate_dag(&notes, &graph.adj);
+        assert!(global.get("1500000006").copied().unwrap_or(false), "B done");
+        assert!(!global.get("1500000007").copied().unwrap_or(false), "C not done (extra task)");
+        assert!(!global.get("1500000008").copied().unwrap_or(false), "A not done");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 6: Metadata status update via normalize
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn normalize_updates_status_to_done() {
+        let content = make_toml_note("A", "1600000001", "none", "- [x] task\n");
+        let result = normalize_note(&content, &HashMap::new());
+        assert!(result.contains("checklist-status = \"done\""), "status updated to done");
+    }
+
+    #[test]
+    fn normalize_updates_status_to_wip() {
+        let content = make_toml_note("A", "1600000002", "none", "- [x] done\n- [ ] pending\n");
+        let result = normalize_note(&content, &HashMap::new());
+        assert!(result.contains("checklist-status = \"wip\""), "status updated to wip");
+    }
+
+    #[test]
+    fn normalize_updates_status_to_todo() {
+        let content = make_toml_note("A", "1600000003", "none", "- [ ] task1\n- [ ] task2\n");
+        let result = normalize_note(&content, &HashMap::new());
+        assert!(result.contains("checklist-status = \"todo\""), "status updated to todo");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 7: Archived notes in chains
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn archived_note_always_done() {
+        // Archived note with unchecked items → still considered done
+        let content = make_toml_note_full("A", "1700000001", "none", "archived",
+            &["9900000099"], "- [ ] unchecked\n");
+        assert!(is_note_done_with_deps(&content, &HashMap::new()), "archived → always done");
+    }
+
+    #[test]
+    fn dag_with_archived_dependency() {
+        let content_a = make_toml_note_full("A", "1700000002", "none", "archived",
+            &["9900000099"], "- [ ] unchecked\n");
+        let content_b = make_toml_note("B", "1700000003", "none", "- [ ] @1700000002\n");
+
+        let mut notes = HashMap::new();
+        notes.insert("1700000002".to_string(),
+            NoteRec { path: PathBuf::from("1700000002.typ"), content: content_a });
+        notes.insert("1700000003".to_string(),
+            NoteRec { path: PathBuf::from("1700000003.typ"), content: content_b });
+
+        let note_map: HashMap<String, (PathBuf, String)> = notes
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph = dependency_graph::build_dependency_graph(&note_map);
+        let global = evaluate_dag(&notes, &graph.adj);
+        assert!(global.get("1700000002").copied().unwrap_or(false), "A (archived) → done");
+        assert!(global.get("1700000003").copied().unwrap_or(false), "B done because A is done");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 8: Multiple checklist groups & edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn two_independent_groups_partial() {
+        let body = "- [x] group1\n\n- [ ] group2\n";
+        let content = make_toml_note("A", "1800000001", "none", body);
+        assert!(!is_note_done_with_deps(&content, &HashMap::new()), "one unchecked leaf → not done");
+    }
+
+    #[test]
+    fn two_independent_groups_all_done() {
+        let body = "- [x] group1\n\n- [x] group2\n";
+        let content = make_toml_note("A", "1800000002", "none", body);
+        assert!(is_note_done_with_deps(&content, &HashMap::new()), "all leaves checked → done");
+    }
+
+    #[test]
+    fn non_leaf_refitem_ignored_by_solver() {
+        // Ref parent with a Local child: Ref is non-leaf → ignored by solver; leaf (local) decides
+        let body = "- [ ] @9900000007\n  - [x] local child\n";
+        let content = make_toml_note("A", "1800000003", "none", body);
+        // dep for 9900000007 is false, but it's non-leaf so only the local child leaf counts
+        let deps = HashMap::from([("9900000007".to_string(), false)]);
+        assert!(is_note_done_with_deps(&content, &deps), "non-leaf ref ignored; leaf child done → done");
+    }
+
+    #[test]
+    fn extract_todo_deps_nested_and_dedup() {
+        // Refs at multiple nesting levels; same ID repeated → should be deduped
+        let content = "- [ ] @1111111111\n  - [ ] @2222222222\n  - [ ] @1111111111\n";
+        let deps = extract_todo_deps(content);
+        // 1111111111 appears twice but should be deduplicated
+        let count_1 = deps.iter().filter(|id| *id == "1111111111").count();
+        assert_eq!(count_1, 1, "duplicate @ID should be deduplicated");
+        assert!(deps.contains(&"2222222222".to_string()), "nested ref included");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 9: Idempotency with nesting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn idempotent_nested_normalize() {
+        let body = "- [ ] parent\n  - [x] child1\n  - [x] child2\n";
+        let content = make_toml_note("A", "1900000001", "none", body);
+        let result1 = normalize_note(&content, &HashMap::new());
+        let result2 = normalize_note(&result1, &HashMap::new());
+        assert_eq!(result1, result2, "second normalize pass must produce no changes");
+    }
+
+    #[test]
+    fn idempotent_dag_nested_structure() {
+        let content_a = make_toml_note("A", "1900000002", "none",
+            "- [x] item1\n  - [x] sub\n");
+        let content_b = make_toml_note("B", "1900000003", "none",
+            "- [ ] parent\n  - [ ] @1900000002\n");
+
+        let mut notes = HashMap::new();
+        notes.insert("1900000002".to_string(),
+            NoteRec { path: PathBuf::from("1900000002.typ"), content: content_a });
+        notes.insert("1900000003".to_string(),
+            NoteRec { path: PathBuf::from("1900000003.typ"), content: content_b });
+
+        let note_map: HashMap<String, (PathBuf, String)> = notes
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph = dependency_graph::build_dependency_graph(&note_map);
+        let global = evaluate_dag(&notes, &graph.adj);
+
+        // First pass
+        let mut updated: HashMap<String, String> = HashMap::new();
+        for (id, rec) in &notes {
+            let deps: HashMap<String, bool> = extract_todo_deps(&rec.content)
+                .into_iter()
+                .map(|dep_id| (dep_id.clone(), global.get(&dep_id).copied().unwrap_or(false)))
+                .collect();
+            updated.insert(id.clone(), normalize_note(&rec.content, &deps));
+        }
+
+        // Second pass
+        let notes2: HashMap<String, NoteRec> = updated
+            .iter()
+            .map(|(id, content)| {
+                (id.clone(), NoteRec { path: notes[id].path.clone(), content: content.clone() })
+            })
+            .collect();
+        let note_map2: HashMap<String, (PathBuf, String)> = notes2
+            .iter()
+            .map(|(id, rec)| (id.clone(), (rec.path.clone(), rec.content.clone())))
+            .collect();
+        let graph2 = dependency_graph::build_dependency_graph(&note_map2);
+        let global2 = evaluate_dag(&notes2, &graph2.adj);
+
+        let mut changed = 0usize;
+        for (id, rec) in &notes2 {
+            let deps: HashMap<String, bool> = extract_todo_deps(&rec.content)
+                .into_iter()
+                .map(|dep_id| (dep_id.clone(), global2.get(&dep_id).copied().unwrap_or(false)))
+                .collect();
+            let new_content = normalize_note(&rec.content, &deps);
+            if new_content != rec.content {
+                changed += 1;
+                eprintln!("id={id} changed on second pass");
+            }
+        }
+        assert_eq!(changed, 0, "second DAG normalize pass must produce no changes");
+    }
 }
