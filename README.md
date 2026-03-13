@@ -102,6 +102,7 @@ Commands:
   reconcile  Reconcile cross-file checkbox states across the whole wiki
   export     Export a BFS context document for AI consumption
   check      Check graph integrity: dead links and orphan notes
+  note-info  Output a single note's metadata as JSON
 
 Options:
   --wiki-root <PATH>   Override the wiki root directory
@@ -143,6 +144,9 @@ zk-lsp export 2602082037 --depth 3 --inverse
 # Check graph integrity (exits 1 on dead links)
 zk-lsp check
 zk-lsp check --no-orphans
+
+# Output a single note's metadata as JSON (for external tools / scripts)
+zk-lsp note-info 2602082037
 
 # Use a non-default wiki directory
 zk-lsp --wiki-root ~/notes generate
@@ -195,6 +199,87 @@ template = """
 ```
 
 If neither file exists, `zk-lsp new` falls back to the built-in default template.
+
+### Custom metadata fields
+
+Declare project-specific metadata fields under `[[metadata.field]]`. Fields must live in the `user.*` namespace and are automatically added to every note created by `zk-lsp new`.
+
+```toml
+# <wiki-root>/zk-lsp.toml
+[metadata]
+version = 1
+
+[[metadata.field]]
+path = "user.course"
+kind = "string"
+default = ""
+
+[[metadata.field]]
+path = "user.priority"
+kind = "string"
+default = "normal"
+
+[[metadata.field]]
+path = "user.tags"
+kind = "array-string"
+default = []
+```
+
+Supported `kind` values: `string`, `boolean`, `array-string`.
+
+The generated note will include a `[user]` section in its TOML metadata block:
+
+```toml
+schema-version = 1
+aliases = []
+abstract = ""
+keywords = []
+generated = true
+checklist-status = "none"
+relation = "active"
+relation-target = []
+
+[user]
+course = ""
+priority = "normal"
+tags = []
+```
+
+Custom fields are preserved by the parser and included in `note-info` JSON output. Core fields (`schema-version`, `aliases`, `abstract`, `keywords`, `generated`, `checklist-status`, `relation`, `relation-target`) cannot be overridden.
+
+## Note Info JSON
+
+`zk-lsp note-info <id>` outputs a single note's metadata as stable JSON, suitable for consumption by external tools and scripts.
+
+```bash
+zk-lsp note-info 2602082037
+```
+
+```json
+{
+  "id": "2602082037",
+  "path": "/home/user/wiki/note/2602082037.typ",
+  "title": "Note Title",
+  "metadata": {
+    "schema-version": 1,
+    "aliases": [],
+    "abstract": "",
+    "keywords": [],
+    "generated": false,
+    "checklist-status": "todo",
+    "relation": "active",
+    "relation-target": [],
+    "user": {
+      "course": "QFT",
+      "priority": "high"
+    }
+  }
+}
+```
+
+- `title` is extracted from the note's heading line (`= Title <ID>`)
+- `metadata` contains all core fields plus any custom `user.*` fields defined in the config
+- Returns a non-zero exit code and prints to stderr if the note is not found or cannot be parsed
 
 ## Neovim Integration
 
