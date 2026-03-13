@@ -58,4 +58,9 @@ pub enum Command {
     },
     /// Initialise a new wiki in the current directory (or --wiki-root)
     Init,
+    /// Output a single note's metadata as JSON
+    NoteInfo {
+        /// The 10-digit note ID (YYMMDDHHMM)
+        id: String,
+    },
 }

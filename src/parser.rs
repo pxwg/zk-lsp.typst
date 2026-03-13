@@ -45,6 +45,8 @@ pub struct ParsedToml {
     pub checklist_status: ChecklistStatus,
     pub relation: Relation,
     pub relation_target: Vec<String>,
+    /// Non-core fields (e.g., `[user]` table) preserved from the TOML block.
+    pub extra: toml::Table,
 }
 
 impl Default for ParsedToml {
@@ -58,6 +60,7 @@ impl Default for ParsedToml {
             checklist_status: ChecklistStatus::None,
             relation: Relation::Active,
             relation_target: Vec::new(),
+            extra: toml::Table::new(),
         }
     }
 }
@@ -210,6 +213,22 @@ pub fn parse_toml_metadata(toml_str: &str) -> Option<ParsedToml> {
         })
         .unwrap_or_default();
 
+    const CORE_FIELDS: &[&str] = &[
+        "schema-version",
+        "aliases",
+        "abstract",
+        "keywords",
+        "generated",
+        "checklist-status",
+        "relation",
+        "relation-target",
+    ];
+    let extra: toml::Table = table
+        .iter()
+        .filter(|(k, _)| !CORE_FIELDS.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
     Some(ParsedToml {
         schema_version,
         aliases,
@@ -219,6 +238,7 @@ pub fn parse_toml_metadata(toml_str: &str) -> Option<ParsedToml> {
         checklist_status,
         relation,
         relation_target,
+        extra,
     })
 }
 
@@ -812,5 +832,81 @@ pub(crate) mod tests {
             compute_status_tag(&archived_mixed, true),
             Some(StatusTag::Done)
         );
+    }
+
+    #[test]
+    fn test_parse_toml_metadata_preserves_extra_fields() {
+        let toml_str = concat!(
+            "schema-version = 1\n",
+            "aliases = []\n",
+            "abstract = \"\"\n",
+            "keywords = []\n",
+            "generated = false\n",
+            "checklist-status = \"none\"\n",
+            "relation = \"active\"\n",
+            "relation-target = []\n",
+            "\n",
+            "[user]\n",
+            "course = \"QFT\"\n",
+            "priority = \"high\"\n",
+        );
+        let parsed = parse_toml_metadata(toml_str).unwrap();
+        // Core fields still work
+        assert_eq!(parsed.relation, Relation::Active);
+        assert_eq!(parsed.checklist_status, ChecklistStatus::None);
+        // Extra fields preserved
+        assert!(parsed.extra.contains_key("user"), "user table should be in extra");
+        let user = parsed.extra["user"].as_table().unwrap();
+        assert_eq!(user["course"].as_str(), Some("QFT"));
+        assert_eq!(user["priority"].as_str(), Some("high"));
+    }
+
+    #[test]
+    fn test_parse_toml_metadata_no_extra_fields() {
+        let toml_str = concat!(
+            "schema-version = 1\n",
+            "aliases = []\n",
+            "abstract = \"\"\n",
+            "keywords = []\n",
+            "generated = false\n",
+            "checklist-status = \"none\"\n",
+            "relation = \"active\"\n",
+            "relation-target = []\n",
+        );
+        let parsed = parse_toml_metadata(toml_str).unwrap();
+        assert_eq!(parsed.extra.len(), 0, "no extra fields expected");
+    }
+
+    #[test]
+    fn test_parse_header_preserves_extra_in_parsed_toml() {
+        let note = concat!(
+            "#import \"../include.typ\": *\n",
+            "#let zk-metadata = toml(bytes(\n",
+            "  ```toml\n",
+            "  schema-version = 1\n",
+            "  aliases = []\n",
+            "  abstract = \"\"\n",
+            "  keywords = []\n",
+            "  generated = false\n",
+            "  checklist-status = \"none\"\n",
+            "  relation = \"active\"\n",
+            "  relation-target = []\n",
+            "\n",
+            "  [user]\n",
+            "  course = \"Topology\"\n",
+            "  ```.text,\n",
+            "))\n",
+            "#show: zettel.with(metadata: zk-metadata)\n",
+            "\n",
+            "= Extra Fields Note <2603120001>\n",
+        );
+        // parse_header should succeed
+        let header = parse_header(note).unwrap();
+        assert_eq!(header.id, "2603120001");
+        // parse_toml_metadata directly should preserve extra
+        let block = find_toml_metadata_block(note).unwrap();
+        let parsed = parse_toml_metadata(&block.toml_content).unwrap();
+        let user = parsed.extra["user"].as_table().unwrap();
+        assert_eq!(user["course"].as_str(), Some("Topology"));
     }
 }
