@@ -359,16 +359,78 @@ The server advertises these capabilities:
 
 ## Tag Formatter and Task Checker
 
-`zk-lsp format` reads a note from stdin and writes the normalized content to stdout. It:
+`zk-lsp format` reads a note from stdin and writes the normalized content to stdout. It runs the configured Lua hooks in order (see [Lua Hooks](#lua-hooks) below), which by default:
 
-1. Ticks or unticks `- [ ] @<id>` checkboxes based on whether all referenced notes are done (reads on-disk `checklist-status` set by `reconcile`)
-2. Updates the `checklist-status` status line in the current note's metadata (`none`, `active`, `done`)
+1. Propagates nested checkbox states bottom-up: if a parent has children, its state is derived from them
+2. Updates the `checklist-status` field in the TOML metadata block
 
 | Checkbox state | Tag |
 |---|---|
-| All incomplete | `todo`
+| All incomplete | `todo` |
 | Mixed | `wip` |
 | All complete | `done` |
+
+## Lua Hooks
+
+`zk-lsp format` runs a pipeline of Lua hook scripts against each note. Two built-in hooks are embedded in the binary and run by default:
+
+| Hook | Effect |
+|---|---|
+| `checklist.lua` | Nested checkbox propagation + `checklist-status` update |
+| `relation_status.lua` | Forces `checklist-status = "done"` for archived/legacy notes |
+
+### Hook input (`NoteInput`)
+
+Each hook receives a `NoteInput` table:
+
+```lua
+---@class NoteInput
+---@field id         string              10-digit note ID
+---@field title      Title|nil           Title heading (nil if unparseable)
+---@field content    string              Raw note content
+---@field metadata   table<string, any>  TOML metadata key→value map
+---@field checkboxes Checkbox[]
+---@field headings   Heading[]
+```
+
+#### `Checkbox` fields
+
+```lua
+---@class Checkbox
+---@field id       string    "local:{line_idx}" for local items; first target_id for ref items
+---@field kind     string    "local" | "ref"
+---@field checked  boolean
+---@field targets  string[]  Target note IDs (empty for local items)
+---@field text     string    Checkbox body text (after `- [x] `)
+---@field span     Span      Full-line byte/line span
+---@field line_idx integer   0-based line index within the note
+---@field indent   integer   Number of leading spaces (indentation level)
+```
+
+`line_idx` and `indent` are sourced directly from the parser — hooks can use them to sort checkboxes by document order and build the parent-child tree from indentation, without any string parsing.
+
+### Hook output (`HookResult`)
+
+```lua
+---@class HookResult
+---@field metadata  table<string, any>|nil  Metadata keys to patch into the TOML block
+---@field edits     TextEdit[]|nil          Byte-range text edits to apply
+```
+
+### Configuration
+
+Add extra file hooks in `~/.config/zk-lsp/config.toml` or `<wiki-root>/zk-lsp.toml`:
+
+```toml
+# Disable the built-in embedded hooks
+disable_default_hooks = true
+
+# File hooks run after the built-in hooks (user-level hooks first, then project-level)
+[[hook]]
+path = "~/.config/zk-lsp/hooks/my_hook.lua"
+```
+
+See `lua/zk_hook_types.lua` for the full EmmyLua type reference and `examples/hooks/` for the source of the built-in hooks.
 
 ## Reconcile
 
