@@ -1,19 +1,18 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tower_lsp::lsp_types::*;
 
+use crate::config::WikiConfig;
 use crate::parser::{self, StatusTag, ChecklistStatus};
 use crate::hooks::lua::{HookRunner, build_hook_note_input};
 use crate::hooks::apply::apply_hook_result;
 
-/// Default formatter hooks, embedded at compile time from examples/.
-const DEFAULT_CHECKLIST_HOOK: &str =
-    include_str!("../../examples/hooks/checklist.lua");
-const DEFAULT_RELATION_HOOK: &str =
-    include_str!("../../examples/hooks/relation_status.lua");
+/// Default hooks embedded at compile time.
+const DEFAULT_CHECKLIST_HOOK: &str = include_str!("../../examples/hooks/checklist.lua");
+const DEFAULT_RELATION_HOOK: &str = include_str!("../../examples/hooks/relation_status.lua");
 
 #[allow(dead_code)]
 /// Apply a list of byte-range edits to `content`.
@@ -232,30 +231,63 @@ fn update_ref_checkboxes_sync(content: &str, dep_states: &HashMap<String, bool>)
     out
 }
 
-/// Format `content` by running the default Lua hooks in sequence.
-///
-/// Hook pipeline (both are embedded at compile time from `examples/hooks/`):
-/// 1. `checklist.lua` — local nested checkbox propagation + checklist-status update
-/// 2. `relation_status.lua` — override status to "done" for archived/legacy notes
+/// Format `content` by running hooks in sequence:
+/// 1. Built-in default hooks (checklist.lua + relation_status.lua, embedded at compile time),
+///    unless `config.zk_config.disable_default_hooks` is true.
+/// 2. User-configured file hooks from `config.zk_config.hooks`, loaded at runtime.
 ///
 /// Cross-file ref-checkbox sync (`@ID` items) is intentionally NOT performed here;
 /// that is the exclusive responsibility of the `reconcile` command.
 ///
 /// On any hook error the step is skipped and a warning is emitted; the original
 /// content (or the output of the previous step) is passed through unchanged.
-pub async fn format_content(content: &str, _note_dir: &Path) -> String {
-    run_default_hooks(content)
+pub async fn format_content(content: &str, config: &WikiConfig) -> String {
+    let zk = &config.zk_config;
+    let mut current = content.to_string();
+    if !zk.disable_default_hooks {
+        current = run_default_hooks(&current);
+    }
+    current = run_hooks(&current, &zk.hooks);
+    current
 }
 
+/// Run the built-in embedded hooks (checklist.lua + relation_status.lua).
 pub(crate) fn run_default_hooks(content: &str) -> String {
     let hooks: &[(&str, &str)] = &[
         ("checklist", DEFAULT_CHECKLIST_HOOK),
         ("relation_status", DEFAULT_RELATION_HOOK),
     ];
-
     let mut current = content.to_string();
     for (name, src) in hooks {
         let runner = match HookRunner::load_str(src) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("default hook '{name}' load error: {e}");
+                continue;
+            }
+        };
+        let input = build_hook_note_input(&current);
+        let result = match runner.run(&input) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("default hook '{name}' run error: {e}");
+                continue;
+            }
+        };
+        match apply_hook_result(&result, &current) {
+            Ok(out) => current = out,
+            Err(e) => tracing::warn!("default hook '{name}' apply error: {e}"),
+        }
+    }
+    current
+}
+
+/// Run user-configured file hooks loaded at runtime. No-op if `hook_paths` is empty.
+pub(crate) fn run_hooks(content: &str, hook_paths: &[PathBuf]) -> String {
+    let mut current = content.to_string();
+    for path in hook_paths {
+        let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        let runner = match HookRunner::load_file(path) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("hook '{name}' load error: {e}");

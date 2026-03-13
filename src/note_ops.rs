@@ -122,7 +122,7 @@ mod tests {
     use crate::parser;
 
     fn config_with_fields(fields: Vec<MetadataFieldConfig>) -> ZkLspConfig {
-        ZkLspConfig { new_note_template: None, metadata: MetadataConfig { fields } }
+        ZkLspConfig { new_note_template: None, metadata: MetadataConfig { fields }, hooks: Vec::new(), disable_default_hooks: false }
     }
 
     #[test]

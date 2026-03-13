@@ -138,6 +138,42 @@ fn merge_metadata(mut user: MetadataConfig, project: MetadataConfig) -> Metadata
     user
 }
 
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(rest)
+    } else if path == "~" {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+fn parse_hooks_config(table: &toml::Table) -> Vec<PathBuf> {
+    let hooks_arr = match table.get("hook").and_then(|v| v.as_array()) {
+        Some(a) => a.clone(),
+        None => return Vec::new(),
+    };
+
+    let mut hooks = Vec::new();
+    for entry in &hooks_arr {
+        let t = match entry.as_table() {
+            Some(t) => t,
+            None => continue,
+        };
+        let path_str = match t.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => {
+                eprintln!("zk-lsp config: hook entry missing 'path'");
+                continue;
+            }
+        };
+        hooks.push(expand_tilde(path_str));
+    }
+    hooks
+}
+
 /// Merged zk-lsp configuration.
 ///
 /// Load order (later overrides earlier):
@@ -149,6 +185,10 @@ pub struct ZkLspConfig {
     pub new_note_template: Option<String>,
     /// User-defined metadata fields added to new notes.
     pub metadata: MetadataConfig,
+    /// Lua hook scripts to run during formatting, in order (after default hooks).
+    pub hooks: Vec<PathBuf>,
+    /// If true, skip the built-in default hooks (checklist.lua + relation_status.lua).
+    pub disable_default_hooks: bool,
 }
 
 impl ZkLspConfig {
@@ -177,16 +217,28 @@ impl ZkLspConfig {
                 .and_then(|v| v.as_str())
                 .map(String::from),
             metadata: parse_metadata_config(&table),
+            hooks: parse_hooks_config(&table),
+            disable_default_hooks: table
+                .get("disable_default_hooks")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         }
     }
 
     /// Load and merge user-level then project-level config.
+    ///
+    /// Hooks from user-level and project-level are concatenated (user first,
+    /// then project), so both levels apply in order.
     pub fn load(wiki_root: &Path) -> Self {
         let user = Self::from_path(&Self::user_config_path());
         let project = Self::from_path(&wiki_root.join("zk-lsp.toml"));
+        let mut hooks = user.hooks;
+        hooks.extend(project.hooks);
         Self {
             new_note_template: project.new_note_template.or(user.new_note_template),
             metadata: merge_metadata(user.metadata, project.metadata),
+            hooks,
+            disable_default_hooks: user.disable_default_hooks || project.disable_default_hooks,
         }
     }
 }
@@ -232,6 +284,11 @@ mod tests {
         ZkLspConfig {
             new_note_template: None,
             metadata: parse_metadata_config(&table),
+            hooks: parse_hooks_config(&table),
+            disable_default_hooks: table
+                .get("disable_default_hooks")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         }
     }
 
@@ -337,6 +394,89 @@ default = ""
 "#,
         );
         assert!(cfg.metadata.fields.is_empty(), "core field path should be rejected");
+    }
+
+    #[test]
+    fn test_disable_default_hooks_false_by_default() {
+        let cfg = parse_config("");
+        assert!(!cfg.disable_default_hooks);
+    }
+
+    #[test]
+    fn test_disable_default_hooks_can_be_set() {
+        let cfg = parse_config("disable_default_hooks = true\n");
+        assert!(cfg.disable_default_hooks);
+    }
+
+    #[test]
+    fn test_disable_default_hooks_merge_either_wins() {
+        let user = ZkLspConfig { disable_default_hooks: true, ..Default::default() };
+        let project = ZkLspConfig { disable_default_hooks: false, ..Default::default() };
+        assert!(user.disable_default_hooks || project.disable_default_hooks);
+
+        let user2 = ZkLspConfig { disable_default_hooks: false, ..Default::default() };
+        let project2 = ZkLspConfig { disable_default_hooks: true, ..Default::default() };
+        assert!(user2.disable_default_hooks || project2.disable_default_hooks);
+    }
+
+    #[test]
+    fn test_hook_config_parsing() {
+        let cfg = parse_config(
+            r#"
+[[hook]]
+path = "/absolute/path/checklist.lua"
+
+[[hook]]
+path = "/absolute/path/relation_status.lua"
+"#,
+        );
+        assert_eq!(cfg.hooks.len(), 2);
+        assert_eq!(cfg.hooks[0], PathBuf::from("/absolute/path/checklist.lua"));
+        assert_eq!(cfg.hooks[1], PathBuf::from("/absolute/path/relation_status.lua"));
+    }
+
+    #[test]
+    fn test_hook_tilde_expansion() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+        let cfg = parse_config(
+            r#"
+[[hook]]
+path = "~/.config/zk-lsp/hooks/checklist.lua"
+"#,
+        );
+        assert_eq!(cfg.hooks.len(), 1);
+        assert_eq!(
+            cfg.hooks[0],
+            PathBuf::from(&home).join(".config/zk-lsp/hooks/checklist.lua")
+        );
+    }
+
+    #[test]
+    fn test_hook_missing_path_skipped() {
+        let cfg = parse_config(
+            r#"
+[[hook]]
+kind = "lua"
+"#,
+        );
+        assert!(cfg.hooks.is_empty(), "hook entry without 'path' should be skipped");
+    }
+
+    #[test]
+    fn test_hook_merge_appends() {
+        let user = ZkLspConfig {
+            hooks: vec![PathBuf::from("/user/checklist.lua")],
+            ..Default::default()
+        };
+        let project = ZkLspConfig {
+            hooks: vec![PathBuf::from("/project/extra.lua")],
+            ..Default::default()
+        };
+        let mut merged_hooks = user.hooks;
+        merged_hooks.extend(project.hooks);
+        assert_eq!(merged_hooks.len(), 2);
+        assert_eq!(merged_hooks[0], PathBuf::from("/user/checklist.lua"));
+        assert_eq!(merged_hooks[1], PathBuf::from("/project/extra.lua"));
     }
 
     #[test]

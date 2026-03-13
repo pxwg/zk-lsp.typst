@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
             let mut content = String::new();
             std::io::stdin().read_to_string(&mut content)?;
             let formatted =
-                handlers::formatting::format_content(&content, &config.note_dir).await;
+                handlers::formatting::format_content(&content, &config).await;
             print!("{formatted}");
         }
         Command::Migrate => {
