@@ -251,11 +251,26 @@ Custom fields are preserved by the parser and included in `note-info` JSON outpu
 
 `zk-lsp reconcile` uses a built-in default DSL module from `examples/rules/checklist.lisp`. You can extend or override it with runtime-loaded Lisp rule files configured in the same config files as hooks.
 
+By default, the built-in module provides the standard checklist behavior:
+
+- local checkbox leaves aggregate to `todo` / `wip` / `done`
+- ref checkboxes derive from their target notes
+- multi-target refs require `all_done`
+- archived notes are forced to `done`
+
+If that is enough, you do not need any extra configuration. Add `[[reconcile.rule]]` entries only when you want to replace or extend that behavior.
+
+### Configuration
+
+Add rule files in `~/.config/zk-lsp/config.toml` or `<wiki-root>/zk-lsp.toml`:
+
 ```toml
 # <wiki-root>/zk-lsp.toml
-# Disable the built-in default reconcile module entirely
+
+# Optional: disable the built-in default reconcile module entirely
 disable_default_reconcile_rules = false
 
+# Rule files are loaded at runtime and merged in order
 [[reconcile.rule]]
 path = "~/.config/zk-lsp/reconcile/base.lisp"
 
@@ -265,7 +280,9 @@ path = "./reconcile/project_rules.lisp"
 
 Rules are loaded fresh from disk on every `zk-lsp reconcile` run, so editing a `.lisp` file does not require recompiling `zk-lsp`; the next run picks up the new contents immediately.
 
-Merge order is:
+### Load order
+
+Rule files are merged in this order:
 
 1. Built-in default module
 2. User-level `[[reconcile.rule]]` files, in config order
@@ -273,7 +290,22 @@ Merge order is:
 
 If `disable_default_reconcile_rules = true`, step 1 is skipped and only your configured files are loaded. In that mode you must provide at least `effective_checked` and `effective_meta` yourself.
 
-Merge semantics:
+### File requirements
+
+Each configured file must contain a full `(module ...)` form. A minimal custom module looks like this:
+
+```lisp
+(module
+  (define (effective_checked c)
+    (observe_checked c))
+
+  (define (effective_meta n field)
+    (observe_meta n field)))
+```
+
+You can also include helper rules and an optional `(policy ...)` block.
+
+### Merge semantics
 
 - Each file must contain a full `(module ...)` form
 - New helper rules are appended
@@ -281,6 +313,30 @@ Merge semantics:
 - `policy` is overridden only when the later file explicitly declares `(policy ...)`
 
 This makes it practical to keep a small shared base module in your user config and layer wiki-specific overrides on top.
+
+### Recommended layout
+
+A practical setup is:
+
+1. Keep common helpers or organization-wide defaults in a user-level rule file
+2. Add project-specific overrides in `<wiki-root>/zk-lsp.toml`
+3. Let later files override only the rules you actually want to change
+
+For example:
+
+```toml
+# ~/.config/zk-lsp/config.toml
+[[reconcile.rule]]
+path = "~/.config/zk-lsp/reconcile/common.lisp"
+```
+
+```toml
+# <wiki-root>/zk-lsp.toml
+[[reconcile.rule]]
+path = "./reconcile/wiki_rules.lisp"
+```
+
+In that setup, `common.lisp` can define shared helper rules, while `wiki_rules.lisp` overrides only `effective_meta` or `effective_checked` for this wiki.
 
 ## Note Info JSON
 
