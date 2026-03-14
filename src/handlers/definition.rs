@@ -12,7 +12,9 @@ pub fn get_definition(
     position: Position,
     index: &Arc<NoteIndex>,
 ) -> Option<Location> {
-    get_definition_with_loader(content, position, index, |path| std::fs::read_to_string(path).ok())
+    get_definition_with_loader(content, position, index, |path| {
+        std::fs::read_to_string(path).ok()
+    })
 }
 
 fn get_definition_with_loader<F>(
@@ -141,7 +143,10 @@ mod tests {
     fn test_definition_on_relation_target_jumps_to_target_title() {
         let path = PathBuf::from("/virtual/2603110001.typ");
         let index = make_index("2603110001", "Target Note", path.clone());
-        let pos = Position { line: 5, character: 22 };
+        let pos = Position {
+            line: 5,
+            character: 22,
+        };
         let loc = get_definition_with_loader(HOST_NOTE_CONTENT, pos, &index, |load_path| {
             if load_path == path.as_path() {
                 Some(TARGET_NOTE_CONTENT.to_string())
@@ -160,7 +165,10 @@ mod tests {
     #[test]
     fn test_definition_outside_relation_target_returns_none() {
         let index = make_index("2603110001", "Target Note", PathBuf::from("/virtual/x.typ"));
-        let pos = Position { line: 5, character: 5 };
+        let pos = Position {
+            line: 5,
+            character: 5,
+        };
         assert!(get_definition(HOST_NOTE_CONTENT, pos, &index).is_none());
     }
 }

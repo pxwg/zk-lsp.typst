@@ -16,7 +16,7 @@ pub struct DeadLinkEntry {
     pub from_id: String,
     pub from_path: PathBuf,
     pub to_id: String,
-    pub line: usize,       // 0-based
+    pub line: usize, // 0-based
     pub byte_start: u32,
     pub byte_end: u32,
     pub line_text: String,
@@ -76,7 +76,11 @@ pub async fn check_graph(config: &WikiConfig) -> anyhow::Result<CheckReport> {
         for r in refs {
             referenced_ids.insert(r.id.clone());
             if !notes.contains_key(&r.id) {
-                let line_text = lines.get(r.line as usize).copied().unwrap_or("").to_string();
+                let line_text = lines
+                    .get(r.line as usize)
+                    .copied()
+                    .unwrap_or("")
+                    .to_string();
                 dead_links.push(DeadLinkEntry {
                     from_id: from_id.clone(),
                     from_path: from_path.clone(),
@@ -92,7 +96,10 @@ pub async fn check_graph(config: &WikiConfig) -> anyhow::Result<CheckReport> {
 
     // Sort dead links for deterministic output
     dead_links.sort_by(|a, b| {
-        a.from_id.cmp(&b.from_id).then(a.line.cmp(&b.line)).then(a.byte_start.cmp(&b.byte_start))
+        a.from_id
+            .cmp(&b.from_id)
+            .then(a.line.cmp(&b.line))
+            .then(a.byte_start.cmp(&b.byte_start))
     });
 
     // Orphan: no inbound references AND no outgoing references
@@ -107,7 +114,10 @@ pub async fn check_graph(config: &WikiConfig) -> anyhow::Result<CheckReport> {
         .collect();
     orphans.sort_by(|a, b| a.id.cmp(&b.id));
 
-    Ok(CheckReport { dead_links, orphans })
+    Ok(CheckReport {
+        dead_links,
+        orphans,
+    })
 }
 
 /// Render the check report in Typst-error style for CLI output (stdout).
@@ -117,9 +127,7 @@ pub fn render_check_report(report: &CheckReport) -> String {
 
     for entry in &report.dead_links {
         if color {
-            out.push_str(
-                "\x1b[1;31merror\x1b[0m\x1b[1m: dead link reference\x1b[0m\n",
-            );
+            out.push_str("\x1b[1;31merror\x1b[0m\x1b[1m: dead link reference\x1b[0m\n");
         } else {
             out.push_str("error: dead link reference\n");
         }
@@ -134,8 +142,7 @@ pub fn render_check_report(report: &CheckReport) -> String {
         let display_col =
             display_width(&entry.line_text[..prefix_bytes.min(entry.line_text.len())]);
         let underline_disp = display_width(
-            &entry.line_text
-                [prefix_bytes..(entry.byte_end as usize).min(entry.line_text.len())],
+            &entry.line_text[prefix_bytes..(entry.byte_end as usize).min(entry.line_text.len())],
         );
         let underline = "^".repeat(underline_disp.max(1));
         let pointer_spaces = " ".repeat(display_col);
@@ -210,15 +217,16 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn make_notes(
-        pairs: &[(&str, &str)],
-    ) -> HashMap<String, (PathBuf, String)> {
+    fn make_notes(pairs: &[(&str, &str)]) -> HashMap<String, (PathBuf, String)> {
         pairs
             .iter()
             .map(|(id, content)| {
                 (
                     id.to_string(),
-                    (PathBuf::from(format!("/wiki/note/{id}.typ")), content.to_string()),
+                    (
+                        PathBuf::from(format!("/wiki/note/{id}.typ")),
+                        content.to_string(),
+                    ),
                 )
             })
             .collect()
@@ -238,8 +246,11 @@ mod tests {
             for r in refs {
                 referenced_ids.insert(r.id.clone());
                 if !notes.contains_key(&r.id) {
-                    let line_text =
-                        lines.get(r.line as usize).copied().unwrap_or("").to_string();
+                    let line_text = lines
+                        .get(r.line as usize)
+                        .copied()
+                        .unwrap_or("")
+                        .to_string();
                     dead_links.push(DeadLinkEntry {
                         from_id: from_id.clone(),
                         from_path: from_path.clone(),
@@ -264,7 +275,10 @@ mod tests {
             .collect();
         orphans.sort_by(|a, b| a.id.cmp(&b.id));
 
-        CheckReport { dead_links, orphans }
+        CheckReport {
+            dead_links,
+            orphans,
+        }
     }
 
     #[test]
@@ -279,10 +293,7 @@ mod tests {
     #[test]
     fn test_check_no_false_dead_link() {
         // A references B, B exists → no dead links
-        let notes = make_notes(&[
-            ("1111111111", "- [ ] @2222222222\n"),
-            ("2222222222", ""),
-        ]);
+        let notes = make_notes(&[("1111111111", "- [ ] @2222222222\n"), ("2222222222", "")]);
         let report = build_report(&notes);
         assert!(report.dead_links.is_empty());
     }
@@ -302,10 +313,7 @@ mod tests {
     fn test_check_no_false_orphan_inbound() {
         // A references B → B has inbound link, not orphan
         // A has outgoing link, not orphan
-        let notes = make_notes(&[
-            ("1111111111", "- [ ] @2222222222\n"),
-            ("2222222222", ""),
-        ]);
+        let notes = make_notes(&[("1111111111", "- [ ] @2222222222\n"), ("2222222222", "")]);
         let report = build_report(&notes);
         // neither is an orphan: 1111111111 has outgoing, 2222222222 has inbound
         assert!(report.orphans.is_empty());

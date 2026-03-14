@@ -139,8 +139,14 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
     let Some(block) = parser::find_toml_metadata_block(content) else {
         return vec![Diagnostic {
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: lines.first().map(|l| l.len()).unwrap_or(0) as u32 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: lines.first().map(|l| l.len()).unwrap_or(0) as u32,
+                },
             },
             severity: Some(DiagnosticSeverity::ERROR),
             source: Some("zk-lsp".into()),
@@ -158,8 +164,14 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
     if title_line_idx.is_none() {
         return vec![Diagnostic {
             range: Range {
-                start: Position { line: block.end_line as u32, character: 0 },
-                end: Position { line: block.end_line as u32, character: 0 },
+                start: Position {
+                    line: block.end_line as u32,
+                    character: 0,
+                },
+                end: Position {
+                    line: block.end_line as u32,
+                    character: 0,
+                },
             },
             severity: Some(DiagnosticSeverity::ERROR),
             source: Some("zk-lsp".into()),
@@ -172,8 +184,14 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
     if let Err(e) = block.toml_content.parse::<toml::Value>() {
         return vec![Diagnostic {
             range: Range {
-                start: Position { line: block.start_line as u32, character: 0 },
-                end: Position { line: block.end_line as u32, character: 0 },
+                start: Position {
+                    line: block.start_line as u32,
+                    character: 0,
+                },
+                end: Position {
+                    line: block.end_line as u32,
+                    character: 0,
+                },
             },
             severity: Some(DiagnosticSeverity::ERROR),
             source: Some("zk-lsp".into()),
@@ -204,16 +222,22 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
         let trimmed = toml_line.trim_start();
         if let Some(field_name) = extract_toml_field_name(trimmed) {
             if let Some((field, _)) = expected_fields
-            .iter()
-            .find(|(field, _)| *field == field_name)
+                .iter()
+                .find(|(field, _)| *field == field_name)
             {
                 present_fields.insert(*field, file_line);
             }
         }
 
         let line_range = Range {
-            start: Position { line: file_line as u32, character: 0 },
-            end: Position { line: file_line as u32, character: file_line_text.len() as u32 },
+            start: Position {
+                line: file_line as u32,
+                character: 0,
+            },
+            end: Position {
+                line: file_line as u32,
+                character: file_line_text.len() as u32,
+            },
         };
 
         if trimmed.starts_with("checklist-status") {
@@ -230,9 +254,7 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
                     });
                 }
             }
-        } else if trimmed.starts_with("relation")
-            && !trimmed.starts_with("relation-target")
-        {
+        } else if trimmed.starts_with("relation") && !trimmed.starts_with("relation-target") {
             if let Some(val) = extract_toml_string_value(trimmed) {
                 if !["active", "archived", "legacy"].contains(&val) {
                     diagnostics.push(Diagnostic {
@@ -259,8 +281,14 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
             .unwrap_or(block.end_line);
         diagnostics.push(Diagnostic {
             range: Range {
-                start: Position { line: insert_line as u32, character: 0 },
-                end: Position { line: insert_line as u32, character: 0 },
+                start: Position {
+                    line: insert_line as u32,
+                    character: 0,
+                },
+                end: Position {
+                    line: insert_line as u32,
+                    character: 0,
+                },
             },
             severity: Some(DiagnosticSeverity::INFORMATION),
             source: Some("zk-lsp".into()),
@@ -284,20 +312,18 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
 
         // relation != "active" but relation-target is empty → WARNING on relation line
         if parsed.relation != Relation::Active && parsed.relation_target.is_empty() {
-            if let Some((i, _)) = block
-                .toml_content
-                .lines()
-                .enumerate()
-                .find(|(_, l)| {
-                    let t = l.trim_start();
-                    t.starts_with("relation") && !t.starts_with("relation-target")
-                })
-            {
+            if let Some((i, _)) = block.toml_content.lines().enumerate().find(|(_, l)| {
+                let t = l.trim_start();
+                t.starts_with("relation") && !t.starts_with("relation-target")
+            }) {
                 let file_line = toml_start + i;
                 let file_line_text = lines.get(file_line).copied().unwrap_or("");
                 diagnostics.push(Diagnostic {
                     range: Range {
-                        start: Position { line: file_line as u32, character: 0 },
+                        start: Position {
+                            line: file_line as u32,
+                            character: 0,
+                        },
                         end: Position {
                             line: file_line as u32,
                             character: file_line_text.len() as u32,
@@ -331,7 +357,10 @@ pub fn get_schema_diagnostics(content: &str, index: &Arc<NoteIndex>) -> Vec<Diag
                 for id in unknown_ids {
                     diagnostics.push(Diagnostic {
                         range: Range {
-                            start: Position { line: file_line as u32, character: 0 },
+                            start: Position {
+                                line: file_line as u32,
+                                character: 0,
+                            },
                             end: Position {
                                 line: file_line as u32,
                                 character: file_line_text.len() as u32,
@@ -362,7 +391,10 @@ pub fn get_orphan_diagnostic(
     uri_path: &str,
     index: &Arc<NoteIndex>,
 ) -> Option<Diagnostic> {
-    let note_id = uri_path.rsplit('/').next().and_then(|s| s.strip_suffix(".typ"))?;
+    let note_id = uri_path
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.strip_suffix(".typ"))?;
 
     // Only flag notes that are in the index
     if index.get(note_id).is_none() {
@@ -381,12 +413,21 @@ pub fn get_orphan_diagnostic(
 
     // Find the title line (contains `<{note_id}>`)
     let needle = format!("<{note_id}>");
-    let (line_num, _line_text) = content.lines().enumerate().find(|(_, l)| l.contains(&needle))?;
+    let (line_num, _line_text) = content
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(&needle))?;
 
     Some(Diagnostic {
         range: Range {
-            start: Position { line: line_num as u32, character: 0 },
-            end: Position { line: line_num as u32, character: 0 },
+            start: Position {
+                line: line_num as u32,
+                character: 0,
+            },
+            end: Position {
+                line: line_num as u32,
+                character: 0,
+            },
         },
         severity: Some(DiagnosticSeverity::HINT),
         source: Some("zk-lsp".into()),
@@ -406,7 +447,9 @@ pub fn get_checklist_diagnostics(content: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     for (i, item) in items.iter().enumerate() {
-        let parser::ChecklistItemKind::Ref { targets } = &item.kind else { continue };
+        let parser::ChecklistItemKind::Ref { targets } = &item.kind else {
+            continue;
+        };
         let is_non_leaf = i + 1 < items.len() && items[i + 1].indent > item.indent;
         if !is_non_leaf {
             continue;
@@ -535,12 +578,16 @@ mod tests {
     }
 
     fn add_backlink(index: &Arc<NoteIndex>, target_id: &str, from_id: &str) {
-        index.backlinks.entry(target_id.to_string()).or_default().push(BacklinkLocation {
-            file: PathBuf::from(format!("/tmp/wiki/note/{from_id}.typ")),
-            line: 0,
-            start_char: 0,
-            end_char: 11,
-        });
+        index
+            .backlinks
+            .entry(target_id.to_string())
+            .or_default()
+            .push(BacklinkLocation {
+                file: PathBuf::from(format!("/tmp/wiki/note/{from_id}.typ")),
+                line: 0,
+                start_char: 0,
+                end_char: 11,
+            });
     }
 
     #[test]
@@ -591,7 +638,10 @@ mod tests {
         let diags = get_schema_diagnostics(content, &index);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
-        assert_eq!(diags[0].message, "Missing note title heading (`= Title <ID>`)");
+        assert_eq!(
+            diags[0].message,
+            "Missing note title heading (`= Title <ID>`)"
+        );
     }
 
     #[test]
@@ -671,8 +721,12 @@ mod tests {
             "= Note <2603110000>\n",
         );
         let diags = get_schema_diagnostics(content, &index);
-        assert!(diags.iter().any(|d| d.message == "Missing TOML field `aliases`"));
-        assert!(diags.iter().any(|d| d.message == "Missing TOML field `checklist-status`"));
+        assert!(diags
+            .iter()
+            .any(|d| d.message == "Missing TOML field `aliases`"));
+        assert!(diags
+            .iter()
+            .any(|d| d.message == "Missing TOML field `checklist-status`"));
         assert!(diags
             .iter()
             .filter(|d| d.message.starts_with("Missing TOML field"))
@@ -763,7 +817,10 @@ mod tests {
             byte_end,
             line_text: line_text.to_string(),
         };
-        let cycle = DependencyCycle { nodes: vec!["1111111111".into()], edges: vec![occ] };
+        let cycle = DependencyCycle {
+            nodes: vec!["1111111111".into()],
+            edges: vec![occ],
+        };
 
         let diags = get_cycle_diagnostics(
             &content,
@@ -773,7 +830,10 @@ mod tests {
         assert_eq!(diags.len(), 1);
         let range = diags[0].range;
         // UTF-16 start: "- [ ] " (6) + "你好 " (3 units) = 9
-        assert_eq!(range.start.character, 9, "start must be UTF-16 offset, not byte offset");
+        assert_eq!(
+            range.start.character, 9,
+            "start must be UTF-16 offset, not byte offset"
+        );
         // UTF-16 end: 9 + 11 = 20
         assert_eq!(range.end.character, 20);
     }

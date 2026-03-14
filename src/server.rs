@@ -40,9 +40,7 @@ impl ZkLspServer {
                 continue;
             }
             let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) if s.len() == 10 && s.chars().all(|c| c.is_ascii_digit()) => {
-                    s.to_string()
-                }
+                Some(s) if s.len() == 10 && s.chars().all(|c| c.is_ascii_digit()) => s.to_string(),
                 _ => continue,
             };
             let Ok(content) = tokio::fs::read_to_string(&path).await else {
@@ -58,7 +56,9 @@ impl ZkLspServer {
         let cycles = self.workspace_cycles().await;
         let file_path = uri.to_file_path().unwrap_or_default();
         let mut diags = diagnostics::get_diagnostics(content, &self.index, uri.path());
-        diags.extend(diagnostics::get_cycle_diagnostics(content, &file_path, &cycles));
+        diags.extend(diagnostics::get_cycle_diagnostics(
+            content, &file_path, &cycles,
+        ));
         diags.extend(diagnostics::get_schema_diagnostics(content, &self.index));
         diags.extend(diagnostics::get_checklist_diagnostics(content));
         if let Some(d) = diagnostics::get_orphan_diagnostic(content, uri.path(), &self.index) {
@@ -254,7 +254,11 @@ impl LanguageServer for ZkLspServer {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
         let mut actions = code_actions::get_code_actions(uri, &params.context.diagnostics);
-        actions.extend(code_actions::get_metadata_actions(uri, &content, params.range));
+        actions.extend(code_actions::get_metadata_actions(
+            uri,
+            &content,
+            params.range,
+        ));
         Ok(Some(actions))
     }
 
@@ -271,7 +275,11 @@ impl LanguageServer for ZkLspServer {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
         let items = completion::get_completions(&content, position, &self.index);
-        Ok(if items.is_empty() { None } else { Some(CompletionResponse::Array(items)) })
+        Ok(if items.is_empty() {
+            None
+        } else {
+            Some(CompletionResponse::Array(items))
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -349,20 +357,18 @@ impl LanguageServer for ZkLspServer {
                 Ok(()) => info!("link.typ regenerated"),
                 Err(e) => error!("generate_link_typ: {e}"),
             },
-            "zk.newNote" => {
-                match note_ops::create_note(&self.config).await {
-                    Ok(path) => {
-                        info!("created note: {}", path.display());
-                        let uri = Url::from_file_path(&path).ok();
-                        if let Some(uri) = uri {
-                            self.client
-                                .show_message(MessageType::INFO, format!("Created: {uri}"))
-                                .await;
-                        }
+            "zk.newNote" => match note_ops::create_note(&self.config).await {
+                Ok(path) => {
+                    info!("created note: {}", path.display());
+                    let uri = Url::from_file_path(&path).ok();
+                    if let Some(uri) = uri {
+                        self.client
+                            .show_message(MessageType::INFO, format!("Created: {uri}"))
+                            .await;
                     }
-                    Err(e) => error!("create_note: {e}"),
                 }
-            }
+                Err(e) => error!("create_note: {e}"),
+            },
             "zk.removeNote" => {
                 if let Some(id) = params.arguments.first().and_then(|v| v.as_str()) {
                     match note_ops::delete_note(id, &self.config).await {
@@ -388,7 +394,8 @@ impl LanguageServer for ZkLspServer {
                     .get(2)
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                match crate::context_export::export_context(&id, depth, inverse, &self.config).await {
+                match crate::context_export::export_context(&id, depth, inverse, &self.config).await
+                {
                     Ok(text) => return Ok(Some(Value::String(text))),
                     Err(e) => error!("exportContext: {e}"),
                 }

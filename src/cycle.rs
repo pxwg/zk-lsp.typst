@@ -12,7 +12,7 @@ use crate::dependency_graph::{CycleEdgeOccurrence, DependencyGraph};
 #[derive(Debug)]
 pub struct DependencyCycle {
     #[allow(dead_code)]
-    pub nodes: Vec<String>,              // note IDs forming the cycle
+    pub nodes: Vec<String>, // note IDs forming the cycle
     pub edges: Vec<CycleEdgeOccurrence>, // positioned occurrences within this cycle
 }
 
@@ -69,10 +69,7 @@ impl<'a> TarjanState<'a> {
     }
 }
 
-fn tarjan_sccs(
-    graph: &HashMap<String, Vec<String>>,
-    all_nodes: &[String],
-) -> Vec<Vec<String>> {
+fn tarjan_sccs(graph: &HashMap<String, Vec<String>>, all_nodes: &[String]) -> Vec<Vec<String>> {
     let mut state = TarjanState {
         graph,
         index_counter: 0,
@@ -107,7 +104,10 @@ pub fn detect_cycles(graph: &DependencyGraph) -> Vec<DependencyCycle> {
     let mut cycles = Vec::new();
     for scc in sccs {
         let is_self_loop = scc.len() == 1
-            && graph.adj.get(&scc[0]).map_or(false, |ns| ns.contains(&scc[0]));
+            && graph
+                .adj
+                .get(&scc[0])
+                .map_or(false, |ns| ns.contains(&scc[0]));
         if scc.len() > 1 || is_self_loop {
             let scc_set: HashSet<&str> = scc.iter().map(String::as_str).collect();
             let edges: Vec<CycleEdgeOccurrence> = graph
@@ -151,10 +151,10 @@ pub fn render_cycle_errors(cycles: &[DependencyCycle]) -> String {
 
             // Display-column count of the prefix before '@' (accounts for CJK double-width)
             let prefix_bytes = edge.byte_start as usize;
-            let display_col = display_width(&edge.line_text[..prefix_bytes.min(edge.line_text.len())]);
+            let display_col =
+                display_width(&edge.line_text[..prefix_bytes.min(edge.line_text.len())]);
             let underline_disp = display_width(
-                &edge.line_text[prefix_bytes..
-                    (edge.byte_end as usize).min(edge.line_text.len())],
+                &edge.line_text[prefix_bytes..(edge.byte_end as usize).min(edge.line_text.len())],
             );
             let underline = "^".repeat(underline_disp.max(1));
             let pointer_spaces = " ".repeat(display_col);
@@ -225,7 +225,10 @@ mod tests {
         pairs
             .iter()
             .map(|(id, _title, content)| {
-                (id.to_string(), (PathBuf::from(format!("{id}.typ")), content.to_string()))
+                (
+                    id.to_string(),
+                    (PathBuf::from(format!("{id}.typ")), content.to_string()),
+                )
             })
             .collect()
     }
@@ -241,15 +244,17 @@ mod tests {
         let cycles = detect_cycles(&graph);
         assert_eq!(cycles.len(), 1, "expected 1 cycle");
         assert_eq!(cycles[0].nodes.len(), 2);
-        assert_eq!(cycles[0].edges.len(), 2, "expected 2 edge occurrences in cycle");
+        assert_eq!(
+            cycles[0].edges.len(),
+            2,
+            "expected 2 edge occurrences in cycle"
+        );
     }
 
     #[test]
     fn test_detect_self_loop() {
         // A → A
-        let notes = simple_notes(&[
-            ("1111111111", "A", "- [ ] @1111111111\n"),
-        ]);
+        let notes = simple_notes(&[("1111111111", "A", "- [ ] @1111111111\n")]);
         let graph = build_dependency_graph(&notes);
         let cycles = detect_cycles(&graph);
         assert_eq!(cycles.len(), 1, "expected 1 cycle (self-loop)");

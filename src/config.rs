@@ -121,7 +121,11 @@ fn parse_metadata_config(table: &toml::Table) -> MetadataConfig {
             continue;
         }
 
-        fields.push(MetadataFieldConfig { path, kind, default });
+        fields.push(MetadataFieldConfig {
+            path,
+            kind,
+            default,
+        });
     }
 
     MetadataConfig { fields }
@@ -271,7 +275,12 @@ impl WikiConfig {
         let note_dir = root.join("note");
         let link_file = root.join("link.typ");
         let zk_config = ZkLspConfig::load(&root);
-        WikiConfig { root, note_dir, link_file, zk_config }
+        WikiConfig {
+            root,
+            note_dir,
+            link_file,
+            zk_config,
+        }
     }
 }
 
@@ -338,7 +347,10 @@ kind = "string"
 default = ""
 "#,
         );
-        assert!(cfg.metadata.fields.is_empty(), "path without user. prefix should be rejected");
+        assert!(
+            cfg.metadata.fields.is_empty(),
+            "path without user. prefix should be rejected"
+        );
     }
 
     #[test]
@@ -351,7 +363,10 @@ kind = "string"
 default = ""
 "#,
         );
-        assert!(cfg.metadata.fields.is_empty(), "nested path should be rejected");
+        assert!(
+            cfg.metadata.fields.is_empty(),
+            "nested path should be rejected"
+        );
     }
 
     #[test]
@@ -364,7 +379,10 @@ kind = "enum"
 default = "a"
 "#,
         );
-        assert!(cfg.metadata.fields.is_empty(), "unknown kind should be rejected");
+        assert!(
+            cfg.metadata.fields.is_empty(),
+            "unknown kind should be rejected"
+        );
     }
 
     #[test]
@@ -377,7 +395,10 @@ kind = "boolean"
 default = "not-a-bool"
 "#,
         );
-        assert!(cfg.metadata.fields.is_empty(), "default type mismatch should be rejected");
+        assert!(
+            cfg.metadata.fields.is_empty(),
+            "default type mismatch should be rejected"
+        );
     }
 
     #[test]
@@ -393,7 +414,10 @@ kind = "string"
 default = ""
 "#,
         );
-        assert!(cfg.metadata.fields.is_empty(), "core field path should be rejected");
+        assert!(
+            cfg.metadata.fields.is_empty(),
+            "core field path should be rejected"
+        );
     }
 
     #[test]
@@ -410,12 +434,24 @@ default = ""
 
     #[test]
     fn test_disable_default_hooks_merge_either_wins() {
-        let user = ZkLspConfig { disable_default_hooks: true, ..Default::default() };
-        let project = ZkLspConfig { disable_default_hooks: false, ..Default::default() };
+        let user = ZkLspConfig {
+            disable_default_hooks: true,
+            ..Default::default()
+        };
+        let project = ZkLspConfig {
+            disable_default_hooks: false,
+            ..Default::default()
+        };
         assert!(user.disable_default_hooks || project.disable_default_hooks);
 
-        let user2 = ZkLspConfig { disable_default_hooks: false, ..Default::default() };
-        let project2 = ZkLspConfig { disable_default_hooks: true, ..Default::default() };
+        let user2 = ZkLspConfig {
+            disable_default_hooks: false,
+            ..Default::default()
+        };
+        let project2 = ZkLspConfig {
+            disable_default_hooks: true,
+            ..Default::default()
+        };
         assert!(user2.disable_default_hooks || project2.disable_default_hooks);
     }
 
@@ -432,7 +468,10 @@ path = "/absolute/path/relation_status.lua"
         );
         assert_eq!(cfg.hooks.len(), 2);
         assert_eq!(cfg.hooks[0], PathBuf::from("/absolute/path/checklist.lua"));
-        assert_eq!(cfg.hooks[1], PathBuf::from("/absolute/path/relation_status.lua"));
+        assert_eq!(
+            cfg.hooks[1],
+            PathBuf::from("/absolute/path/relation_status.lua")
+        );
     }
 
     #[test]
@@ -459,7 +498,10 @@ path = "~/.config/zk-lsp/hooks/checklist.lua"
 kind = "lua"
 "#,
         );
-        assert!(cfg.hooks.is_empty(), "hook entry without 'path' should be skipped");
+        assert!(
+            cfg.hooks.is_empty(),
+            "hook entry without 'path' should be skipped"
+        );
     }
 
     #[test]

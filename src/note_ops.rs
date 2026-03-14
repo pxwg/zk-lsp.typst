@@ -52,7 +52,9 @@ pub fn build_metadata_block(config: &ZkLspConfig) -> String {
         .fields
         .iter()
         .filter_map(|f| {
-            f.path.strip_prefix("user.").map(|key| (key, toml_default_inline(&f.default)))
+            f.path
+                .strip_prefix("user.")
+                .map(|key| (key, toml_default_inline(&f.default)))
         })
         .collect();
 
@@ -122,7 +124,12 @@ mod tests {
     use crate::parser;
 
     fn config_with_fields(fields: Vec<MetadataFieldConfig>) -> ZkLspConfig {
-        ZkLspConfig { new_note_template: None, metadata: MetadataConfig { fields }, hooks: Vec::new(), disable_default_hooks: false }
+        ZkLspConfig {
+            new_note_template: None,
+            metadata: MetadataConfig { fields },
+            hooks: Vec::new(),
+            disable_default_hooks: false,
+        }
     }
 
     #[test]
@@ -132,7 +139,10 @@ mod tests {
         assert!(block.contains("schema-version = 1"));
         assert!(block.contains("checklist-status = \"none\""));
         assert!(block.contains("relation = \"active\""));
-        assert!(!block.contains("[user]"), "no [user] section when no custom fields");
+        assert!(
+            !block.contains("[user]"),
+            "no [user] section when no custom fields"
+        );
         // Should be parseable TOML
         let inner = extract_toml_from_block(&block).expect("should extract TOML");
         let parsed = parser::parse_toml_metadata(&inner).expect("should parse");
@@ -166,7 +176,10 @@ mod tests {
         // Parse and verify extra fields are preserved
         let inner = extract_toml_from_block(&block).expect("should extract TOML");
         let parsed = parser::parse_toml_metadata(&inner).expect("should parse");
-        assert!(parsed.extra.contains_key("user"), "user table should be in extra");
+        assert!(
+            parsed.extra.contains_key("user"),
+            "user table should be in extra"
+        );
     }
 
     /// Extract the TOML content from between ```toml and ``` fences.

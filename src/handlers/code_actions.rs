@@ -79,11 +79,7 @@ pub fn get_code_actions(uri: &Url, diagnostics: &[Diagnostic]) -> Vec<CodeAction
 ///
 /// Action A — Toggle `checklist-status` to any other valid value.
 /// Action B — Mark/unmark `relation` as archived or legacy (with `relation-target` placeholder).
-pub fn get_metadata_actions(
-    uri: &Url,
-    content: &str,
-    range: Range,
-) -> Vec<CodeActionOrCommand> {
+pub fn get_metadata_actions(uri: &Url, content: &str, range: Range) -> Vec<CodeActionOrCommand> {
     let Some(block) = parser::find_toml_metadata_block(content) else {
         return Vec::new();
     };
@@ -158,7 +154,10 @@ pub fn get_metadata_actions(
                 let mut edits = Vec::new();
                 edits.push(TextEdit {
                     range: Range {
-                        start: Position { line: rel_file_line as u32, character: 0 },
+                        start: Position {
+                            line: rel_file_line as u32,
+                            character: 0,
+                        },
                         end: Position {
                             line: rel_file_line as u32,
                             character: rel_line_text.len() as u32,
@@ -170,8 +169,14 @@ pub fn get_metadata_actions(
                     // Insert new line after relation line
                     edits.push(TextEdit {
                         range: Range {
-                            start: Position { line: rel_file_line as u32 + 1, character: 0 },
-                            end: Position { line: rel_file_line as u32 + 1, character: 0 },
+                            start: Position {
+                                line: rel_file_line as u32 + 1,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: rel_file_line as u32 + 1,
+                                character: 0,
+                            },
                         },
                         new_text: "  relation-target = [\"\"]\n".to_string(),
                     });
@@ -197,7 +202,10 @@ pub fn get_metadata_actions(
             let mut edits = Vec::new();
             edits.push(TextEdit {
                 range: Range {
-                    start: Position { line: rel_file_line as u32, character: 0 },
+                    start: Position {
+                        line: rel_file_line as u32,
+                        character: 0,
+                    },
                     end: Position {
                         line: rel_file_line as u32,
                         character: rel_line_text.len() as u32,
@@ -217,11 +225,18 @@ pub fn get_metadata_actions(
             }));
 
             // Also allow switching to the other non-active relation
-            let other_rel = if current_relation == "archived" { "legacy" } else { "archived" };
+            let other_rel = if current_relation == "archived" {
+                "legacy"
+            } else {
+                "archived"
+            };
             let mut edits = Vec::new();
             edits.push(TextEdit {
                 range: Range {
-                    start: Position { line: rel_file_line as u32, character: 0 },
+                    start: Position {
+                        line: rel_file_line as u32,
+                        character: 0,
+                    },
                     end: Position {
                         line: rel_file_line as u32,
                         character: rel_line_text.len() as u32,
@@ -232,8 +247,14 @@ pub fn get_metadata_actions(
             if relation_target_line_idx.is_none() {
                 edits.push(TextEdit {
                     range: Range {
-                        start: Position { line: rel_file_line as u32 + 1, character: 0 },
-                        end: Position { line: rel_file_line as u32 + 1, character: 0 },
+                        start: Position {
+                            line: rel_file_line as u32 + 1,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: rel_file_line as u32 + 1,
+                            character: 0,
+                        },
                     },
                     new_text: "  relation-target = [\"\"]\n".to_string(),
                 });
@@ -323,15 +344,27 @@ mod tests {
 
     fn inside_block_range() -> Range {
         Range {
-            start: Position { line: 4, character: 0 },
-            end: Position { line: 4, character: 0 },
+            start: Position {
+                line: 4,
+                character: 0,
+            },
+            end: Position {
+                line: 4,
+                character: 0,
+            },
         }
     }
 
     fn outside_block_range() -> Range {
         Range {
-            start: Position { line: 11, character: 0 },
-            end: Position { line: 11, character: 0 },
+            start: Position {
+                line: 11,
+                character: 0,
+            },
+            end: Position {
+                line: 11,
+                character: 0,
+            },
         }
     }
 
@@ -368,7 +401,10 @@ mod tests {
             }
             None
         });
-        assert!(archived_action.is_some(), "Mark as archived action must exist");
+        assert!(
+            archived_action.is_some(),
+            "Mark as archived action must exist"
+        );
         let ca = archived_action.unwrap();
         let edits = ca
             .edit
@@ -393,8 +429,14 @@ mod tests {
     fn test_metadata_actions_unmark_archived() {
         let uri = Url::parse("file:///wiki/note/2603110002.typ").unwrap();
         let range = Range {
-            start: Position { line: 5, character: 0 },
-            end: Position { line: 5, character: 0 },
+            start: Position {
+                line: 5,
+                character: 0,
+            },
+            end: Position {
+                line: 5,
+                character: 0,
+            },
         };
         let actions = get_metadata_actions(&uri, NOTE_TOML_ARCHIVED, range);
         let mark_active = actions.iter().find_map(|a| {
@@ -405,7 +447,10 @@ mod tests {
             }
             None
         });
-        assert!(mark_active.is_some(), "Mark as active action must exist for archived note");
+        assert!(
+            mark_active.is_some(),
+            "Mark as active action must exist for archived note"
+        );
         // Should also offer switching to the other non-active relation
         let mark_legacy = actions.iter().find_map(|a| {
             if let CodeActionOrCommand::CodeAction(ca) = a {
@@ -415,15 +460,24 @@ mod tests {
             }
             None
         });
-        assert!(mark_legacy.is_some(), "Mark as legacy action must exist when currently archived");
+        assert!(
+            mark_legacy.is_some(),
+            "Mark as legacy action must exist when currently archived"
+        );
     }
 
     #[test]
     fn test_metadata_actions_mark_active_preserves_existing_relation_targets() {
         let uri = Url::parse("file:///wiki/note/2603110002.typ").unwrap();
         let range = Range {
-            start: Position { line: 5, character: 0 },
-            end: Position { line: 5, character: 0 },
+            start: Position {
+                line: 5,
+                character: 0,
+            },
+            end: Position {
+                line: 5,
+                character: 0,
+            },
         };
         let actions = get_metadata_actions(&uri, NOTE_TOML_ARCHIVED, range);
         let mark_active = actions.iter().find_map(|a| match a {
@@ -442,7 +496,8 @@ mod tests {
     #[test]
     fn test_metadata_actions_mark_archived_preserves_existing_relation_targets() {
         let uri = make_uri();
-        let actions = get_metadata_actions(&uri, NOTE_TOML_ACTIVE_WITH_TARGETS, inside_block_range());
+        let actions =
+            get_metadata_actions(&uri, NOTE_TOML_ACTIVE_WITH_TARGETS, inside_block_range());
         let archived_action = actions.iter().find_map(|a| match a {
             CodeActionOrCommand::CodeAction(ca) if ca.title == "ZK: Mark as archived" => Some(ca),
             _ => None,
@@ -461,8 +516,14 @@ mod tests {
         let uri = make_uri();
         let diagnostic = Diagnostic {
             range: Range {
-                start: Position { line: 5, character: 0 },
-                end: Position { line: 5, character: 0 },
+                start: Position {
+                    line: 5,
+                    character: 0,
+                },
+                end: Position {
+                    line: 5,
+                    character: 0,
+                },
             },
             source: Some("zk-lsp".into()),
             message: "Missing TOML field `aliases`".into(),
@@ -501,8 +562,14 @@ mod tests {
         let uri = make_uri();
         let diagnostic = Diagnostic {
             range: Range {
-                start: Position { line: 0, character: 6 },
-                end: Position { line: 0, character: 17 },
+                start: Position {
+                    line: 0,
+                    character: 6,
+                },
+                end: Position {
+                    line: 0,
+                    character: 17,
+                },
             },
             source: Some("zk-lsp".into()),
             message: "Note @1111111111 is legacy. New ids: @2222222222, @3333333333".into(),

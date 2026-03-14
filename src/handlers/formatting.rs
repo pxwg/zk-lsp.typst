@@ -6,9 +6,9 @@ use regex::Regex;
 use tower_lsp::lsp_types::*;
 
 use crate::config::WikiConfig;
-use crate::parser::{self, StatusTag, ChecklistStatus};
-use crate::hooks::lua::{HookRunner, build_hook_note_input};
 use crate::hooks::apply::apply_hook_result;
+use crate::hooks::lua::{build_hook_note_input, HookRunner};
+use crate::parser::{self, ChecklistStatus, StatusTag};
 
 /// Default hooks embedded at compile time.
 const DEFAULT_CHECKLIST_HOOK: &str = include_str!("../../examples/hooks/checklist.lua");
@@ -35,7 +35,10 @@ pub fn apply_byte_edits(content: &str, edits: &[(usize, usize, String)]) -> anyh
         anyhow::ensure!(
             w[0].1 <= w[1].0,
             "edits overlap: [{}, {}) and [{}, {})",
-            w[0].0, w[0].1, w[1].0, w[1].1
+            w[0].0,
+            w[0].1,
+            w[1].0,
+            w[1].1
         );
     }
     // Apply in reverse order so earlier byte offsets remain valid
@@ -58,8 +61,10 @@ fn toml_value_inline(value: &toml::Value) -> anyhow::Result<String> {
         toml::Value::Float(f) => Ok(f.to_string()),
         toml::Value::Boolean(b) => Ok(b.to_string()),
         toml::Value::Array(arr) => {
-            let items: Vec<String> =
-                arr.iter().map(toml_value_inline).collect::<anyhow::Result<_>>()?;
+            let items: Vec<String> = arr
+                .iter()
+                .map(toml_value_inline)
+                .collect::<anyhow::Result<_>>()?;
             Ok(format!("[{}]", items.join(", ")))
         }
         _ => anyhow::bail!("nested TOML tables are not supported in a metadata patch"),
@@ -179,13 +184,27 @@ pub fn is_note_done(content: &str) -> bool {
 /// Normalize `content` using a pre-built map of dependency states.
 /// Pure (no I/O): looks up each `@ID` in `dep_states` (absent = not done).
 /// Calls `update_ref_checkboxes_sync`, `update_nested_checkboxes`, and `apply_tag_edit`.
+#[allow(dead_code)]
 pub fn normalize_note(content: &str, dep_states: &HashMap<String, bool>) -> String {
     let after_refs = update_ref_checkboxes_sync(content, dep_states);
     let after_nested = update_nested_checkboxes(&after_refs);
     apply_tag_edit(&after_nested)
 }
 
+/// Write-back variant: uses pre-evaluated per-checkbox truth (line_idx -> checked).
+/// Drives ref-item checkboxes directly from evaluator output instead of re-deriving
+/// from dep_states. Calls the same nested-checkbox and tag-edit pipeline.
+pub fn normalize_note_from_checked(
+    content: &str,
+    checked_by_line: &HashMap<usize, bool>,
+) -> String {
+    let after_refs = update_ref_checkboxes_by_line(content, checked_by_line);
+    let after_nested = update_nested_checkboxes(&after_refs);
+    apply_tag_edit(&after_nested)
+}
+
 /// Sync version of ref-checkbox update using a pre-built dep_states map.
+#[allow(dead_code)]
 fn update_ref_checkboxes_sync(content: &str, dep_states: &HashMap<String, bool>) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
@@ -210,12 +229,53 @@ fn update_ref_checkboxes_sync(content: &str, dep_states: &HashMap<String, bool>)
         if ids.is_empty() {
             continue;
         }
-        let all_done = ids.iter().all(|id| dep_states.get(*id).copied().unwrap_or(false));
+        let all_done = ids
+            .iter()
+            .all(|id| dep_states.get(*id).copied().unwrap_or(false));
         let new_state = if all_done { 'x' } else { ' ' };
         if get_todo_state(line) != Some(new_state) {
             if let Some(new_line) = replace_todo_state(line, new_state) {
                 result[i] = new_line;
                 changed = true;
+            }
+        }
+    }
+
+    if !changed {
+        return content.to_string();
+    }
+    let trailing_newline = content.ends_with('\n');
+    let mut out = result.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    out
+}
+
+fn update_ref_checkboxes_by_line(content: &str, checked_by_line: &HashMap<usize, bool>) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    let mut changed = false;
+    let mut in_fence = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if !is_todo_line(line) || !RE_TODO_ID.is_match(line) {
+            continue;
+        }
+        if let Some(&checked) = checked_by_line.get(&i) {
+            let new_state = if checked { 'x' } else { ' ' };
+            if get_todo_state(line) != Some(new_state) {
+                if let Some(new_line) = replace_todo_state(line, new_state) {
+                    result[i] = new_line;
+                    changed = true;
+                }
             }
         }
     }
@@ -286,7 +346,10 @@ pub(crate) fn run_default_hooks(content: &str) -> String {
 pub(crate) fn run_hooks(content: &str, hook_paths: &[PathBuf]) -> String {
     let mut current = content.to_string();
     for path in hook_paths {
-        let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
         let runner = match HookRunner::load_file(path) {
             Ok(r) => r,
             Err(e) => {
@@ -478,7 +541,6 @@ pub fn compute_tag_edit(content: &str) -> Option<TextEdit> {
         new_text: new_line,
     })
 }
-
 
 fn is_todo_line(line: &str) -> bool {
     let t = line.trim_start();

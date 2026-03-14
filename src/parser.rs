@@ -2,10 +2,8 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-pub(crate) static RE_ID_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"@(\d{10})").unwrap());
-pub(crate) static RE_TITLE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^=\s+.*<(\d{10})>").unwrap());
+pub(crate) static RE_ID_REF: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\d{10})").unwrap());
+pub(crate) static RE_TITLE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^=\s+.*<(\d{10})>").unwrap());
 pub(crate) static RE_EVO: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"#evolution_link\s*\(\s*<(\d{10})>\s*\)").unwrap());
 pub(crate) static RE_ALT: Lazy<Regex> =
@@ -77,9 +75,9 @@ pub struct NoteHeader {
     pub aliases: Vec<String>,
     pub abstract_text: Option<String>,
     pub keywords: Vec<String>,
-    pub tag_line_idx: Option<usize>,        // 0-based; None for TOML-format notes
+    pub tag_line_idx: Option<usize>, // 0-based; None for TOML-format notes
     #[allow(dead_code)]
-    pub title_line_idx: usize,             // 0-based
+    pub title_line_idx: usize, // 0-based
     pub metadata_block: Option<TomlMetadataBlock>,
     pub checklist_status: Option<ChecklistStatus>,
 }
@@ -257,11 +255,7 @@ pub fn parse_header(content: &str) -> Option<NoteHeader> {
         .map(|offset| block.end_line + 1 + offset)?;
 
     let title_line = lines[title_line_idx];
-    let id = RE_TITLE
-        .captures(title_line)?
-        .get(1)?
-        .as_str()
-        .to_string();
+    let id = RE_TITLE.captures(title_line)?.get(1)?.as_str().to_string();
     let title = RE_TITLE
         .captures(title_line)?
         .get(0)?
@@ -378,7 +372,13 @@ pub fn parse_checklist_items(content: &str) -> Vec<ChecklistItem> {
         } else {
             ChecklistItemKind::Ref { targets }
         };
-        items.push(ChecklistItem { checked, kind, text, line_idx, indent });
+        items.push(ChecklistItem {
+            checked,
+            kind,
+            text,
+            line_idx,
+            indent,
+        });
     }
     items
 }
@@ -618,7 +618,11 @@ pub fn parse_headings(content: &str) -> Vec<Heading> {
             let level = cap[1].len() as u32;
             let raw_text = cap[2].trim().to_string();
             let text = RE_ID_SUFFIX.replace(&raw_text, "").to_string();
-            headings.push(Heading { level, text, line_idx });
+            headings.push(Heading {
+                level,
+                text,
+                line_idx,
+            });
         }
     }
     headings
@@ -808,7 +812,10 @@ pub(crate) mod tests {
         let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
         assert!(ids.contains(&"2602082037"));
         assert!(ids.contains(&"2602082106"));
-        assert!(!ids.contains(&"9999999999"), "ID in block comment must be skipped");
+        assert!(
+            !ids.contains(&"9999999999"),
+            "ID in block comment must be skipped"
+        );
     }
 
     #[test]
@@ -829,7 +836,10 @@ pub(crate) mod tests {
         let refs = find_all_refs_filtered(content);
         let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
         // ID inside TOML block should be skipped
-        assert!(!ids.contains(&"2603110001"), "ID in TOML block must be skipped");
+        assert!(
+            !ids.contains(&"2603110001"),
+            "ID in TOML block must be skipped"
+        );
         // ID in regular content should be found
         assert!(ids.contains(&"2603110002"));
     }
@@ -840,7 +850,10 @@ pub(crate) mod tests {
         let refs = find_all_refs_filtered(content);
         let ids: Vec<&str> = refs.iter().map(|r| r.id.as_str()).collect();
         assert!(ids.contains(&"1111111111"));
-        assert!(!ids.contains(&"2222222222"), "ID in fenced block must be skipped");
+        assert!(
+            !ids.contains(&"2222222222"),
+            "ID in fenced block must be skipped"
+        );
         assert!(ids.contains(&"3333333333"));
     }
 
@@ -898,7 +911,10 @@ pub(crate) mod tests {
         assert_eq!(parsed.relation, Relation::Active);
         assert_eq!(parsed.checklist_status, ChecklistStatus::None);
         // Extra fields preserved
-        assert!(parsed.extra.contains_key("user"), "user table should be in extra");
+        assert!(
+            parsed.extra.contains_key("user"),
+            "user table should be in extra"
+        );
         let user = parsed.extra["user"].as_table().unwrap();
         assert_eq!(user["course"].as_str(), Some("QFT"));
         assert_eq!(user["priority"].as_str(), Some("high"));

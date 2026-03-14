@@ -11,7 +11,9 @@ use crate::parser;
 /// The hover body is the full file content of the referenced note, rendered as
 /// a fenced Typst code block so editors can apply syntax highlighting.
 pub fn get_hover(content: &str, position: Position, index: &Arc<NoteIndex>) -> Option<Hover> {
-    get_hover_with_loader(content, position, index, |path| std::fs::read_to_string(path).ok())
+    get_hover_with_loader(content, position, index, |path| {
+        std::fs::read_to_string(path).ok()
+    })
 }
 
 fn get_hover_with_loader<F>(
@@ -164,7 +166,10 @@ mod tests {
         let index = make_index("2603110001", "Target Note", path);
         // Line 5: `  relation-target = ["2603110001"]`
         //                               ^col 22 (inside the ID)
-        let pos = Position { line: 5, character: 22 };
+        let pos = Position {
+            line: 5,
+            character: 22,
+        };
         let hover = get_hover_with_loader(NOTE_CONTENT, pos, &index, |path| {
             if path == PathBuf::from("/virtual/2603110001.typ").as_path() {
                 Some(TARGET_NOTE_CONTENT.to_string())
@@ -173,20 +178,27 @@ mod tests {
             }
         });
         assert!(hover.is_some());
-        let HoverContents::Markup(mc) = hover.unwrap().contents else { panic!() };
+        let HoverContents::Markup(mc) = hover.unwrap().contents else {
+            panic!()
+        };
         assert!(mc.value.contains("2603110001"));
         assert!(mc.value.contains("Target Note"));
         assert!(mc.value.contains("= Target <2603110001>"));
         assert!(mc.value.contains("正文第一行"));
         assert!(!mc.value.contains("#let zk-metadata"));
-        assert!(!mc.value.contains("#show: zettel.with(metadata: zk-metadata)"));
+        assert!(!mc
+            .value
+            .contains("#show: zettel.with(metadata: zk-metadata)"));
     }
 
     #[test]
     fn test_hover_outside_id_returns_none() {
         let index = make_index("2603110001", "Target Note", PathBuf::from("/tmp/x.typ"));
         // col 5 is on `relation-target` text, not on the ID
-        let pos = Position { line: 5, character: 5 };
+        let pos = Position {
+            line: 5,
+            character: 5,
+        };
         assert!(get_hover(NOTE_CONTENT, pos, &index).is_none());
     }
 

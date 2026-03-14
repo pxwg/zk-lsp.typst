@@ -2,10 +2,10 @@ use std::path::Path;
 
 use mlua::{Lua, Value as LuaValue};
 
-use crate::parser::{self, ChecklistItemKind};
 use super::types::{
     HookCheckbox, HookHeading, HookNoteInput, HookResult, HookSpan, HookTextEdit, HookTitle,
 };
+use crate::parser::{self, ChecklistItemKind};
 
 /// A loaded Lua hook script that exposes a `run(note) -> result` function.
 pub struct HookRunner {
@@ -86,7 +86,10 @@ pub fn build_hook_note_input(content: &str) -> HookNoteInput {
         let title_span = span_for_line(
             &line_offsets,
             header.title_line_idx,
-            lines.get(header.title_line_idx).map(|l| l.len()).unwrap_or(0),
+            lines
+                .get(header.title_line_idx)
+                .map(|l| l.len())
+                .unwrap_or(0),
         );
         let hook_title = HookTitle {
             text: header.title.clone(),
@@ -200,9 +203,9 @@ fn toml_value_to_lua(lua: &Lua, value: &toml::Value) -> mlua::Result<LuaValue> {
             }
             Ok(LuaValue::Table(t))
         }
-        toml::Value::Datetime(dt) => {
-            Ok(LuaValue::String(lua.create_string(dt.to_string().as_bytes())?))
-        }
+        toml::Value::Datetime(dt) => Ok(LuaValue::String(
+            lua.create_string(dt.to_string().as_bytes())?,
+        )),
     }
 }
 
@@ -300,7 +303,10 @@ fn lua_value_to_toml(value: &LuaValue) -> anyhow::Result<toml::Value> {
             Ok(toml::Value::Table(tbl))
         }
         LuaValue::Nil => anyhow::bail!("nil is not a valid TOML value"),
-        other => anyhow::bail!("unsupported Lua type for TOML conversion: {}", other.type_name()),
+        other => anyhow::bail!(
+            "unsupported Lua type for TOML conversion: {}",
+            other.type_name()
+        ),
     }
 }
 
@@ -319,9 +325,9 @@ fn lua_table_to_hook_result(table: mlua::Table) -> anyhow::Result<HookResult> {
     if let Ok(LuaValue::Table(edits_tbl)) = table.get::<LuaValue>("edits") {
         let len = edits_tbl.raw_len();
         for i in 1..=len {
-            let entry: mlua::Table = edits_tbl.get(i).map_err(|e| {
-                anyhow::anyhow!("edit[{i}] is not a table: {e}")
-            })?;
+            let entry: mlua::Table = edits_tbl
+                .get(i)
+                .map_err(|e| anyhow::anyhow!("edit[{i}] is not a table: {e}"))?;
             let start_byte: usize = entry
                 .get::<LuaValue>("start_byte")
                 .ok()
@@ -346,7 +352,11 @@ fn lua_table_to_hook_result(table: mlua::Table) -> anyhow::Result<HookResult> {
                     _ => None,
                 })
                 .ok_or_else(|| anyhow::anyhow!("edit[{i}].text must be a string"))?;
-            result.edits.push(HookTextEdit { start_byte, end_byte, text });
+            result.edits.push(HookTextEdit {
+                start_byte,
+                end_byte,
+                text,
+            });
         }
     }
 
@@ -359,10 +369,10 @@ fn lua_table_to_hook_result(table: mlua::Table) -> anyhow::Result<HookResult> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::*;
-    use crate::hooks::apply::{apply_hook_result, validate_hook_result};
     use crate::handlers::formatting::run_default_hooks;
+    use crate::hooks::apply::{apply_hook_result, validate_hook_result};
+    use std::collections::HashMap;
 
     fn make_toml_note(title: &str, id: &str, status: &str, relation: &str, body: &str) -> String {
         format!(
@@ -397,7 +407,8 @@ mod tests {
     #[test]
     fn test_load_and_call_empty_run() {
         let runner = HookRunner::load_str("function run(n) return {} end").unwrap();
-        let input = build_hook_note_input(&make_toml_note("Test", "2601010000", "none", "active", ""));
+        let input =
+            build_hook_note_input(&make_toml_note("Test", "2601010000", "none", "active", ""));
         let result = runner.run(&input).unwrap();
         assert!(result.metadata.is_empty());
         assert!(result.edits.is_empty());
@@ -409,7 +420,8 @@ mod tests {
             r#"function run(n) return { metadata = { ["checklist-status"] = n.id } } end"#,
         )
         .unwrap();
-        let input = build_hook_note_input(&make_toml_note("Test", "2601010001", "none", "active", ""));
+        let input =
+            build_hook_note_input(&make_toml_note("Test", "2601010001", "none", "active", ""));
         let result = runner.run(&input).unwrap();
         assert_eq!(
             result.metadata.get("checklist-status"),
@@ -451,7 +463,10 @@ mod tests {
         if let Some(toml::Value::String(s)) = result.metadata.get("checklist-status") {
             let byte: usize = s.parse().expect("should be a byte offset");
             assert!(byte < note.len(), "byte offset in bounds");
-            assert!(note[byte..].starts_with("- [ ]"), "should point to checkbox");
+            assert!(
+                note[byte..].starts_with("- [ ]"),
+                "should point to checkbox"
+            );
         } else {
             panic!("expected a string value");
         }
@@ -479,7 +494,10 @@ mod tests {
             let line_idx: usize = parts[0].parse().expect("line_idx should be an integer");
             let indent: usize = parts[1].parse().expect("indent should be an integer");
             // The checkbox is on the body line; there are header lines above it.
-            assert!(line_idx > 0, "checkbox should not be on line 0 (header is above)");
+            assert!(
+                line_idx > 0,
+                "checkbox should not be on line 0 (header is above)"
+            );
             assert_eq!(indent, 0, "top-level checkbox has zero indent");
         } else {
             panic!("expected string metadata value");
@@ -569,7 +587,11 @@ end
         let result = runner.run(&input).unwrap();
 
         // The hook should have emitted an edit unchecking the parent ref item.
-        assert_eq!(result.edits.len(), 1, "expected one edit to uncheck the parent");
+        assert_eq!(
+            result.edits.len(),
+            1,
+            "expected one edit to uncheck the parent"
+        );
         assert!(
             result.edits[0].text.contains("[ ]"),
             "edit should replace [x] with [ ]"
@@ -582,7 +604,8 @@ end
             r#"function run(n) return { metadata = { ["checklist-status"] = "done" } } end"#,
         )
         .unwrap();
-        let input = build_hook_note_input(&make_toml_note("Test", "2601010004", "none", "active", ""));
+        let input =
+            build_hook_note_input(&make_toml_note("Test", "2601010004", "none", "active", ""));
         let result = runner.run(&input).unwrap();
         assert_eq!(
             result.metadata.get("checklist-status"),
@@ -608,14 +631,21 @@ end
         let output = apply_hook_result(&result, &note).unwrap();
         assert!(output.contains("- [x] my task"), "edit was applied");
         // Status is NOT updated automatically — the Lua hook is responsible for that
-        assert!(output.contains("checklist-status = \"none\""), "status unchanged without hook update");
+        assert!(
+            output.contains("checklist-status = \"none\""),
+            "status unchanged without hook update"
+        );
     }
 
     #[test]
     fn test_invalid_edit_range_errors() {
         let result = HookResult {
             metadata: HashMap::new(),
-            edits: vec![HookTextEdit { start_byte: 10, end_byte: 5, text: "x".to_string() }],
+            edits: vec![HookTextEdit {
+                start_byte: 10,
+                end_byte: 5,
+                text: "x".to_string(),
+            }],
         };
         assert!(validate_hook_result(&result, "hello world").is_err());
     }
@@ -626,8 +656,16 @@ end
         let result = HookResult {
             metadata: HashMap::new(),
             edits: vec![
-                HookTextEdit { start_byte: 0, end_byte: 5, text: "a".to_string() },
-                HookTextEdit { start_byte: 3, end_byte: 8, text: "b".to_string() },
+                HookTextEdit {
+                    start_byte: 0,
+                    end_byte: 5,
+                    text: "a".to_string(),
+                },
+                HookTextEdit {
+                    start_byte: 3,
+                    end_byte: 8,
+                    text: "b".to_string(),
+                },
             ],
         };
         assert!(validate_hook_result(&result, content).is_err());
@@ -642,8 +680,12 @@ end
     #[test]
     fn test_invalid_return_type_errors() {
         let runner = HookRunner::load_str(r#"function run(n) return "not a table" end"#).unwrap();
-        let input = build_hook_note_input(&make_toml_note("Test", "2601010009", "none", "active", ""));
-        assert!(runner.run(&input).is_err(), "should error on non-table return");
+        let input =
+            build_hook_note_input(&make_toml_note("Test", "2601010009", "none", "active", ""));
+        assert!(
+            runner.run(&input).is_err(),
+            "should error on non-table return"
+        );
     }
 
     /// Hook result is applied directly — the Lua hook is the authority, no Rust correction.
@@ -687,7 +729,10 @@ end
         let note = make_toml_note("Test", "2601020001", "none", "active", body);
         let out = run_default_hooks(&note);
         assert!(out.contains("- [x] parent"), "parent should be checked");
-        assert!(out.contains("checklist-status = \"done\""), "status should be done");
+        assert!(
+            out.contains("checklist-status = \"done\""),
+            "status should be done"
+        );
     }
 
     #[test]
@@ -703,7 +748,10 @@ end
         let body = "- [ ] grandparent\n  - [ ] parent\n    - [x] grandchild\n";
         let note = make_toml_note("Test", "2601020003", "none", "active", body);
         let out = run_default_hooks(&note);
-        assert!(out.contains("- [x] grandparent"), "grandparent propagated to done");
+        assert!(
+            out.contains("- [x] grandparent"),
+            "grandparent propagated to done"
+        );
         assert!(out.contains("checklist-status = \"done\""), "status done");
     }
 
@@ -712,14 +760,20 @@ end
         let body = "- [ ] unfinished task\n";
         let note = make_toml_note("Test", "2601020004", "none", "archived", body);
         let out = run_default_hooks(&note);
-        assert!(out.contains("checklist-status = \"done\""), "archived note → done");
+        assert!(
+            out.contains("checklist-status = \"done\""),
+            "archived note → done"
+        );
     }
 
     #[test]
     fn default_hooks_legacy_status_is_done() {
         let note = make_toml_note("Test", "2601020005", "none", "legacy", "");
         let out = run_default_hooks(&note);
-        assert!(out.contains("checklist-status = \"done\""), "legacy note → done");
+        assert!(
+            out.contains("checklist-status = \"done\""),
+            "legacy note → done"
+        );
     }
 
     #[test]
@@ -737,7 +791,13 @@ end
         let body_without = "- [ ] parent\n  - [x] child";
         let note_with = make_toml_note("Test", "2601020007", "none", "active", body_with);
         let note_without = make_toml_note("Test", "2601020008", "none", "active", body_without);
-        assert!(run_default_hooks(&note_with).ends_with('\n'), "trailing newline preserved");
-        assert!(!run_default_hooks(&note_without).ends_with('\n'), "no spurious newline added");
+        assert!(
+            run_default_hooks(&note_with).ends_with('\n'),
+            "trailing newline preserved"
+        );
+        assert!(
+            !run_default_hooks(&note_without).ends_with('\n'),
+            "no spurious newline added"
+        );
     }
 }

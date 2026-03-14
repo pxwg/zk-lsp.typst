@@ -12,9 +12,9 @@ pub struct CycleEdgeOccurrence {
     pub from_note_id: String,
     pub to_note_id: String,
     pub file_path: PathBuf,
-    pub line: usize,       // 0-based line index
-    pub byte_start: u32,   // byte offset of '@' within the line
-    pub byte_end: u32,     // byte offset past the last digit
+    pub line: usize,     // 0-based line index
+    pub byte_start: u32, // byte offset of '@' within the line
+    pub byte_end: u32,   // byte offset past the last digit
     #[allow(dead_code)]
     pub line_text: String, // full line text for display
 }
@@ -30,9 +30,7 @@ pub struct DependencyGraph {
 /// Every `RefItem` checklist entry contributes one directed edge per `RefTarget`:
 /// `from_note_id → to_note_id`. Duplicate edges in `adj` are deduplicated; all
 /// positioned occurrences are retained for error reporting.
-pub fn build_dependency_graph(
-    notes: &HashMap<String, (PathBuf, String)>,
-) -> DependencyGraph {
+pub fn build_dependency_graph(notes: &HashMap<String, (PathBuf, String)>) -> DependencyGraph {
     let mut adj: HashMap<String, Vec<String>> = HashMap::new();
     let mut occurrences: Vec<CycleEdgeOccurrence> = Vec::new();
 
@@ -66,5 +64,9 @@ pub fn build_dependency_graph(
     }
 
     let nodes = adj.keys().cloned().collect();
-    DependencyGraph { nodes, adj, occurrences }
+    DependencyGraph {
+        nodes,
+        adj,
+        occurrences,
+    }
 }

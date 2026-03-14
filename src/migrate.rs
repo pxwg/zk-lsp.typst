@@ -312,7 +312,10 @@ mod tests {
         // checklist-status migrated from #tag.done
         let block = find_toml_metadata_block(&migrated).unwrap();
         let parsed = parse_toml_metadata(&block.toml_content).unwrap();
-        assert_eq!(parsed.checklist_status, crate::parser::ChecklistStatus::Done);
+        assert_eq!(
+            parsed.checklist_status,
+            crate::parser::ChecklistStatus::Done
+        );
 
         // Body content is preserved.
         assert!(migrated.contains("Some content here. @2602082135"));
@@ -338,7 +341,10 @@ mod tests {
 
         let block = find_toml_metadata_block(&migrated).unwrap();
         let parsed = parse_toml_metadata(&block.toml_content).unwrap();
-        assert_eq!(parsed.checklist_status, crate::parser::ChecklistStatus::Todo);
+        assert_eq!(
+            parsed.checklist_status,
+            crate::parser::ChecklistStatus::Todo
+        );
         assert_eq!(parsed.relation, crate::parser::Relation::Active);
 
         assert!(migrated.contains("Content. @2602082037"));

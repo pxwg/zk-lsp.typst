@@ -45,16 +45,29 @@ pub async fn export_context(
 
         let header = parser::parse_header(&content);
         let title = header.as_ref().map(|h| h.title.clone()).unwrap_or_default();
-        let abstract_text =
-            header.as_ref().and_then(|h| h.abstract_text.clone()).unwrap_or_default();
-        let keywords = header.as_ref().map(|h| h.keywords.clone()).unwrap_or_default();
+        let abstract_text = header
+            .as_ref()
+            .and_then(|h| h.abstract_text.clone())
+            .unwrap_or_default();
+        let keywords = header
+            .as_ref()
+            .map(|h| h.keywords.clone())
+            .unwrap_or_default();
         let checklist_status = header
             .as_ref()
             .and_then(|h| h.checklist_status.clone())
             .unwrap_or(ChecklistStatus::None);
         let relation = header
             .as_ref()
-            .map(|h| if h.archived { Relation::Archived } else if h.legacy { Relation::Legacy } else { Relation::Active })
+            .map(|h| {
+                if h.archived {
+                    Relation::Archived
+                } else if h.legacy {
+                    Relation::Legacy
+                } else {
+                    Relation::Active
+                }
+            })
             .unwrap_or(Relation::Active);
 
         // Extract outgoing refs (filtered: skips TOML block, comments, fences)
@@ -145,7 +158,12 @@ pub async fn export_context(
         out.push_str(&format!("**Status:** checklist={cs} · relation={rel}\n"));
 
         if !section.out_refs.is_empty() {
-            let refs_str = section.out_refs.iter().map(|r| format!("@{r}")).collect::<Vec<_>>().join(", ");
+            let refs_str = section
+                .out_refs
+                .iter()
+                .map(|r| format!("@{r}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             out.push_str(&format!("**Outgoing links:** {refs_str}\n"));
         }
 
@@ -182,11 +200,15 @@ async fn build_reverse_map(config: &WikiConfig) -> HashMap<String, Vec<String>> 
     };
     while let Ok(Some(entry)) = dir.next_entry().await {
         let path = entry.path();
-        let Some(ext) = path.extension() else { continue };
+        let Some(ext) = path.extension() else {
+            continue;
+        };
         if ext != "typ" {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         if stem.len() != 10 || !stem.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
@@ -206,7 +228,10 @@ async fn build_reverse_map(config: &WikiConfig) -> HashMap<String, Vec<String>> 
 fn extract_body(content: &str, id: &str) -> String {
     let needle = format!("<{id}>");
     let lines: Vec<&str> = content.lines().collect();
-    let start = lines.iter().position(|l| l.contains(&needle)).unwrap_or(lines.len());
+    let start = lines
+        .iter()
+        .position(|l| l.contains(&needle))
+        .unwrap_or(lines.len());
     lines[start..].join("\n")
 }
 
@@ -290,7 +315,9 @@ mod tests {
         let tmp = make_test_dir("single");
         write_note(&tmp.join("note"), "1111111111", "Entry Note", &[]);
         let config = WikiConfig::from_root(tmp.clone());
-        let out = export_context("1111111111", 0, false, &config).await.unwrap();
+        let out = export_context("1111111111", 0, false, &config)
+            .await
+            .unwrap();
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(out.contains("1111111111"));
         assert!(out.contains("Entry Note"));
@@ -300,10 +327,17 @@ mod tests {
     #[tokio::test]
     async fn test_export_bfs_depth() {
         let tmp = make_test_dir("bfs");
-        write_note(&tmp.join("note"), "1111111111", "Entry Note", &["2222222222"]);
+        write_note(
+            &tmp.join("note"),
+            "1111111111",
+            "Entry Note",
+            &["2222222222"],
+        );
         write_note(&tmp.join("note"), "2222222222", "Linked Note", &[]);
         let config = WikiConfig::from_root(tmp.clone());
-        let out = export_context("1111111111", 1, false, &config).await.unwrap();
+        let out = export_context("1111111111", 1, false, &config)
+            .await
+            .unwrap();
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(out.contains("1111111111"));
         assert!(out.contains("Entry Note"));

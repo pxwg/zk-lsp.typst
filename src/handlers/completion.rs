@@ -64,7 +64,9 @@ pub fn get_completions(
         let col = position.character as usize;
         let prefix = &current_line[..col.min(current_line.len())];
         let after_bracket = prefix.rfind('[').map_or(prefix, |p| &prefix[p + 1..]);
-        let after_delim = after_bracket.rfind(',').map_or(after_bracket, |p| &after_bracket[p + 1..]);
+        let after_delim = after_bracket
+            .rfind(',')
+            .map_or(after_bracket, |p| &after_bracket[p + 1..]);
         let inside_string = after_delim.chars().filter(|&c| c == '"').count() % 2 == 1;
 
         return index
@@ -155,7 +157,9 @@ mod tests {
     use std::sync::Arc;
 
     fn empty_index() -> Arc<NoteIndex> {
-        Arc::new(NoteIndex::new(Arc::new(WikiConfig::from_root(PathBuf::from("/tmp")))))
+        Arc::new(NoteIndex::new(Arc::new(WikiConfig::from_root(
+            PathBuf::from("/tmp"),
+        ))))
     }
 
     const NOTE_TOML: &str = concat!(
@@ -187,7 +191,9 @@ mod tests {
         assert!(labels.contains(&"todo"));
         assert!(labels.contains(&"wip"));
         assert!(labels.contains(&"done"));
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::ENUM_MEMBER)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::ENUM_MEMBER)));
     }
 
     #[test]
@@ -231,7 +237,9 @@ mod tests {
         // Line 6: `  relation-target = []`
         let items = get_completions(NOTE_TOML, pos(6), &index);
         // Empty index → no items, but should not panic
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::REFERENCE)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::REFERENCE)));
     }
 
     #[test]
@@ -250,7 +258,10 @@ mod tests {
             "= Test <2603110000>\n",
         );
         // `  relation-target = [` → col 21 puts cursor just after `[`
-        let pos_inside = Position { line: 4, character: 21 };
+        let pos_inside = Position {
+            line: 4,
+            character: 21,
+        };
         let index = index_with_note("2603110001", "Some Note");
         let items = get_completions(content, pos_inside, &index);
         assert_eq!(items.len(), 1);
@@ -274,7 +285,10 @@ mod tests {
             "= Test <2603110000>\n",
         );
         // col 22 is just after the `"` inside `["`
-        let pos_inside_str = Position { line: 4, character: 22 };
+        let pos_inside_str = Position {
+            line: 4,
+            character: 22,
+        };
         let index = index_with_note("2603110001", "Some Note");
         let items = get_completions(content, pos_inside_str, &index);
         assert_eq!(items.len(), 1);
@@ -298,7 +312,7 @@ mod tests {
             "#let zk-metadata = toml(bytes(\n",
             "  ```toml\n",
             "  schema-version = 1\n",
-            "  \n",       // blank line at line 4 → should suggest missing fields
+            "  \n", // blank line at line 4 → should suggest missing fields
             "  ```.text,\n",
             "))\n",
             "#show: zettel.with(metadata: zk-metadata)\n",
@@ -310,6 +324,9 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(labels.contains(&"checklist-status"));
         assert!(labels.contains(&"relation"));
-        assert!(!labels.contains(&"schema-version"), "already present field must not appear");
+        assert!(
+            !labels.contains(&"schema-version"),
+            "already present field must not appear"
+        );
     }
 }

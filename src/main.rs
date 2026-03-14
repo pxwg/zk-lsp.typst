@@ -1,12 +1,12 @@
 mod cli;
 mod config;
 mod context_export;
-#[allow(dead_code)]
-mod hooks;
 mod cycle;
 mod dependency_graph;
 mod graph_check;
 mod handlers;
+#[allow(dead_code)]
+mod hooks;
 mod index;
 mod init;
 mod link_gen;
@@ -70,8 +70,7 @@ async fn main() -> anyhow::Result<()> {
             use std::io::Read;
             let mut content = String::new();
             std::io::stdin().read_to_string(&mut content)?;
-            let formatted =
-                handlers::formatting::format_content(&content, &config).await;
+            let formatted = handlers::formatting::format_content(&content, &config).await;
             print!("{formatted}");
         }
         Command::Migrate => {
@@ -91,7 +90,10 @@ async fn main() -> anyhow::Result<()> {
             print!("{out}");
         }
         Command::Init => unreachable!("handled above"),
-        Command::Check { no_orphans, no_dead_links } => {
+        Command::Check {
+            no_orphans,
+            no_dead_links,
+        } => {
             let mut report = graph_check::check_graph(&config).await?;
             let has_dead_links = !report.dead_links.is_empty();
             if no_dead_links {
@@ -115,8 +117,11 @@ async fn main() -> anyhow::Result<()> {
             let content = tokio::fs::read_to_string(&path)
                 .await
                 .with_context(|| format!("reading {}", path.display()))?;
-            let header = parser::parse_header(&content)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse note {id} (may be legacy format; run zk-lsp migrate first)"))?;
+            let header = parser::parse_header(&content).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Failed to parse note {id} (may be legacy format; run zk-lsp migrate first)"
+                )
+            })?;
             let parsed_toml = parser::find_toml_metadata_block(&content)
                 .and_then(|b| parser::parse_toml_metadata(&b.toml_content))
                 .unwrap_or_default();
@@ -131,18 +136,18 @@ fn toml_value_to_json(v: &toml::Value) -> serde_json::Value {
     match v {
         toml::Value::String(s) => serde_json::Value::String(s.clone()),
         toml::Value::Integer(n) => serde_json::Value::Number((*n).into()),
-        toml::Value::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        toml::Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
         toml::Value::Array(arr) => {
             serde_json::Value::Array(arr.iter().map(toml_value_to_json).collect())
         }
         toml::Value::Table(t) => {
-            let map: serde_json::Map<String, serde_json::Value> =
-                t.iter().map(|(k, v)| (k.clone(), toml_value_to_json(v))).collect();
+            let map: serde_json::Map<String, serde_json::Value> = t
+                .iter()
+                .map(|(k, v)| (k.clone(), toml_value_to_json(v)))
+                .collect();
             serde_json::Value::Object(map)
         }
         toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
