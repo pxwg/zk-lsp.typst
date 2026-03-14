@@ -157,8 +157,8 @@ mod tests {
     use std::sync::Arc;
 
     fn empty_index() -> Arc<NoteIndex> {
-        Arc::new(NoteIndex::new(Arc::new(WikiConfig::from_root(
-            PathBuf::from("/tmp"),
+        Arc::new(NoteIndex::new(Arc::new(tokio::sync::RwLock::new(
+            WikiConfig::from_root(PathBuf::from("/tmp")),
         ))))
     }
 
@@ -210,7 +210,9 @@ mod tests {
     fn index_with_note(id: &str, title: &str) -> Arc<NoteIndex> {
         use crate::index::NoteInfo;
         use std::path::PathBuf;
-        let idx = NoteIndex::new(Arc::new(WikiConfig::from_root(PathBuf::from("/tmp"))));
+        let idx = NoteIndex::new(Arc::new(tokio::sync::RwLock::new(WikiConfig::from_root(
+            PathBuf::from("/tmp"),
+        ))));
         idx.notes.insert(
             id.to_string(),
             NoteInfo {

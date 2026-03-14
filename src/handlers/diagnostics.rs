@@ -489,7 +489,9 @@ mod tests {
     use std::sync::Arc;
 
     fn make_index() -> Arc<NoteIndex> {
-        let config = Arc::new(WikiConfig::from_root(PathBuf::from("/tmp/wiki")));
+        let config = Arc::new(tokio::sync::RwLock::new(WikiConfig::from_root(
+            PathBuf::from("/tmp/wiki"),
+        )));
         Arc::new(NoteIndex::new(config))
     }
 

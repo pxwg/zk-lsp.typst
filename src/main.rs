@@ -19,6 +19,7 @@ mod watcher;
 
 use anyhow::Context;
 use clap::Parser;
+use tokio::sync::RwLock;
 use tower_lsp::{LspService, Server};
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -48,11 +49,11 @@ async fn main() -> anyhow::Result<()> {
         return init::init_wiki(&config).await;
     }
 
-    let config = std::sync::Arc::new(WikiConfig::resolve(cli.wiki_root, None));
+    let config = std::sync::Arc::new(WikiConfig::resolve(cli.wiki_root.clone(), None));
 
     match cli.command.unwrap_or(Command::Lsp) {
         Command::Lsp => {
-            run_lsp(config).await?;
+            run_lsp(cli.wiki_root).await?;
         }
         Command::Generate => {
             link_gen::generate_link_typ(&config).await?;
@@ -208,11 +209,12 @@ fn build_note_info_json(
     Ok(serde_json::to_string_pretty(&output)?)
 }
 
-async fn run_lsp(config: std::sync::Arc<WikiConfig>) -> anyhow::Result<()> {
+async fn run_lsp(cli_root: Option<std::path::PathBuf>) -> anyhow::Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
+    let config = std::sync::Arc::new(RwLock::new(WikiConfig::resolve(cli_root.clone(), None)));
 
-    let (service, socket) = LspService::new(|client| ZkLspServer::new(client, config));
+    let (service, socket) = LspService::new(|client| ZkLspServer::new(client, config, cli_root));
     Server::new(stdin, stdout, socket).serve(service).await;
     Ok(())
 }

@@ -110,7 +110,9 @@ mod tests {
     use std::sync::Arc;
 
     fn make_index(id: &str, title: &str, path: PathBuf) -> Arc<NoteIndex> {
-        let idx = NoteIndex::new(Arc::new(WikiConfig::from_root(PathBuf::from("/tmp"))));
+        let idx = NoteIndex::new(Arc::new(tokio::sync::RwLock::new(WikiConfig::from_root(
+            PathBuf::from("/tmp"),
+        ))));
         idx.notes.insert(
             id.to_string(),
             NoteInfo {

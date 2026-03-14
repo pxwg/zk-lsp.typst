@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebouncedEvent};
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use crate::config::WikiConfig;
@@ -14,12 +15,15 @@ use crate::link_gen;
 /// Start the filesystem watcher on note_dir.
 /// Sends events (Create / Modify / Remove) to the returned receiver.
 pub fn start_watcher(
-    config: Arc<WikiConfig>,
+    config: Arc<RwLock<WikiConfig>>,
     index: Arc<NoteIndex>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     let (tx, mut rx) = mpsc::channel::<Vec<DebouncedEvent>>(64);
 
-    let note_dir = config.note_dir.clone();
+    let note_dir = {
+        let config = config.blocking_read();
+        config.note_dir.clone()
+    };
 
     // Spawn the blocking watcher thread
     std::thread::spawn(move || {
@@ -58,7 +62,8 @@ pub fn start_watcher(
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let _ = link_gen::add_entry(&id, &config).await;
+                    let config_snapshot = { config.read().await.clone() };
+                    let _ = link_gen::add_entry(&id, &config_snapshot).await;
                 } else {
                     info!("note removed: {}", path.display());
                     index.remove_by_path(&path);
@@ -67,7 +72,8 @@ pub fn start_watcher(
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let _ = link_gen::remove_entry(&id, &config).await;
+                    let config_snapshot = { config.read().await.clone() };
+                    let _ = link_gen::remove_entry(&id, &config_snapshot).await;
                 }
             }
         }

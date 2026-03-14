@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -16,25 +17,36 @@ use crate::{link_gen, note_ops, reconcile, watcher};
 pub struct ZkLspServer {
     client: Client,
     index: Arc<NoteIndex>,
-    config: Arc<WikiConfig>,
+    config: Arc<RwLock<WikiConfig>>,
+    cli_root: Option<std::path::PathBuf>,
 }
 
 impl ZkLspServer {
-    pub fn new(client: Client, config: Arc<WikiConfig>) -> Self {
+    pub fn new(
+        client: Client,
+        config: Arc<RwLock<WikiConfig>>,
+        cli_root: Option<std::path::PathBuf>,
+    ) -> Self {
         let index = Arc::new(NoteIndex::new(Arc::clone(&config)));
         ZkLspServer {
             client,
             index,
             config,
+            cli_root,
         }
+    }
+
+    async fn current_config(&self) -> WikiConfig {
+        self.config.read().await.clone()
     }
 
     async fn publish_diagnostics(&self, uri: Url, content: &str) {
         let file_path = uri.to_file_path().unwrap_or_default();
         let mut diags = diagnostics::get_diagnostics(content, &self.index, uri.path());
         diags.extend(diagnostics::get_schema_diagnostics(content, &self.index));
+        let config = self.current_config().await;
         if let Ok(reconcile_diags) =
-            reconcile::collect_diagnostics(&self.config, Some((&file_path, content))).await
+            reconcile::collect_diagnostics(&config, Some((&file_path, content))).await
         {
             diags.extend(diagnostics::get_reconcile_diagnostics(
                 content,
@@ -52,9 +64,11 @@ impl ZkLspServer {
 #[tower_lsp::async_trait]
 impl LanguageServer for ZkLspServer {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
-        // Honour initializationOptions.wikiRoot if the config wasn't set by CLI/env
-        // (config is already resolved at server construction; this is just informational)
-        info!("initialize: {:?}", params.root_uri);
+        let init_root = WikiConfig::lsp_root(&params);
+        let resolved = WikiConfig::resolve(self.cli_root.clone(), init_root);
+        let resolved_root = resolved.root.clone();
+        *self.config.write().await = resolved;
+        info!("initialize: resolved root to {}", resolved_root.display());
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -334,25 +348,32 @@ impl LanguageServer for ZkLspServer {
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> LspResult<Option<Value>> {
         match params.command.as_str() {
-            "zk.generateLinkTyp" => match link_gen::generate_link_typ(&self.config).await {
-                Ok(()) => info!("link.typ regenerated"),
-                Err(e) => error!("generate_link_typ: {e}"),
-            },
-            "zk.newNote" => match note_ops::create_note(&self.config).await {
-                Ok(path) => {
-                    info!("created note: {}", path.display());
-                    let uri = Url::from_file_path(&path).ok();
-                    if let Some(uri) = uri {
-                        self.client
-                            .show_message(MessageType::INFO, format!("Created: {uri}"))
-                            .await;
-                    }
+            "zk.generateLinkTyp" => {
+                let config = self.current_config().await;
+                match link_gen::generate_link_typ(&config).await {
+                    Ok(()) => info!("link.typ regenerated"),
+                    Err(e) => error!("generate_link_typ: {e}"),
                 }
-                Err(e) => error!("create_note: {e}"),
-            },
+            }
+            "zk.newNote" => {
+                let config = self.current_config().await;
+                match note_ops::create_note(&config).await {
+                    Ok(path) => {
+                        info!("created note: {}", path.display());
+                        let uri = Url::from_file_path(&path).ok();
+                        if let Some(uri) = uri {
+                            self.client
+                                .show_message(MessageType::INFO, format!("Created: {uri}"))
+                                .await;
+                        }
+                    }
+                    Err(e) => error!("create_note: {e}"),
+                }
+            }
             "zk.removeNote" => {
                 if let Some(id) = params.arguments.first().and_then(|v| v.as_str()) {
-                    match note_ops::delete_note(id, &self.config).await {
+                    let config = self.current_config().await;
+                    match note_ops::delete_note(id, &config).await {
                         Ok(()) => info!("deleted note {id}"),
                         Err(e) => error!("delete_note: {e}"),
                     }
@@ -375,8 +396,8 @@ impl LanguageServer for ZkLspServer {
                     .get(2)
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                match crate::context_export::export_context(&id, depth, inverse, &self.config).await
-                {
+                let config = self.current_config().await;
+                match crate::context_export::export_context(&id, depth, inverse, &config).await {
                     Ok(text) => return Ok(Some(Value::String(text))),
                     Err(e) => error!("exportContext: {e}"),
                 }

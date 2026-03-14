@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use dashmap::DashMap;
 use tokio::fs;
+use tokio::sync::RwLock;
 
 use crate::config::WikiConfig;
 use crate::parser::{self, ChecklistStatus};
@@ -38,11 +39,11 @@ pub struct BacklinkLocation {
 pub struct NoteIndex {
     pub notes: Arc<DashMap<String, NoteInfo>>,
     pub backlinks: Arc<DashMap<String, Vec<BacklinkLocation>>>,
-    pub config: Arc<WikiConfig>,
+    pub config: Arc<RwLock<WikiConfig>>,
 }
 
 impl NoteIndex {
-    pub fn new(config: Arc<WikiConfig>) -> Self {
+    pub fn new(config: Arc<RwLock<WikiConfig>>) -> Self {
         NoteIndex {
             notes: Arc::new(DashMap::new()),
             backlinks: Arc::new(DashMap::new()),
@@ -55,7 +56,11 @@ impl NoteIndex {
         self.notes.clear();
         self.backlinks.clear();
 
-        let mut entries = fs::read_dir(&self.config.note_dir).await?;
+        let note_dir = {
+            let config = self.config.read().await;
+            config.note_dir.clone()
+        };
+        let mut entries = fs::read_dir(&note_dir).await?;
         let mut paths = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();

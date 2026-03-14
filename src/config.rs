@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use tower_lsp::lsp_types::{InitializeParams, Url};
+
 /// Core TOML metadata fields that cannot be overridden by user-defined fields.
 const CORE_METADATA_FIELDS: &[&str] = &[
     "schema-version",
@@ -324,6 +326,34 @@ impl WikiConfig {
             zk_config,
         }
     }
+
+    pub fn lsp_root(params: &InitializeParams) -> Option<PathBuf> {
+        params
+            .initialization_options
+            .as_ref()
+            .and_then(parse_root_dir_value)
+            .or_else(|| params.root_uri.as_ref().and_then(url_to_path))
+            .or_else(|| {
+                params
+                    .workspace_folders
+                    .as_ref()
+                    .and_then(|folders| folders.first())
+                    .and_then(|folder| url_to_path(&folder.uri))
+            })
+    }
+}
+
+fn parse_root_dir_value(value: &serde_json::Value) -> Option<PathBuf> {
+    value
+        .get("root_dir")
+        .or_else(|| value.get("rootDir"))
+        .or_else(|| value.get("wikiRoot"))
+        .and_then(|root| root.as_str())
+        .map(PathBuf::from)
+}
+
+fn url_to_path(url: &Url) -> Option<PathBuf> {
+    url.to_file_path().ok()
 }
 
 #[cfg(test)]
