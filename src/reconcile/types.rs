@@ -1,6 +1,7 @@
 use std::fmt;
 /// Core types for the Reconcile DSL v1.
 use std::path::PathBuf;
+use std::rc::Rc;
 
 pub type NoteId = String;
 
@@ -16,7 +17,7 @@ impl fmt::Display for CheckboxId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Status {
     None,
     Todo,
@@ -46,21 +47,22 @@ impl fmt::Display for Status {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
     Bool(bool),
     Status(Status),
-    List(Vec<Value>),
+    List(Rc<Vec<Value>>),
     /// Runtime-only: a reference to a note (used inside the evaluator).
     NoteRef(NoteId),
     /// Runtime-only: a reference to a checkbox (used inside the evaluator).
     CheckboxRef(CheckboxId),
     /// Runtime-only: a string value (e.g., from `observe_meta` for non-status fields).
-    String(String),
+    String(Rc<str>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
+    Any,
     Bool,
     Status,
     String,
@@ -72,6 +74,7 @@ pub enum Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Type::Any => write!(f, "Any"),
             Type::Bool => write!(f, "Bool"),
             Type::Status => write!(f, "Status"),
             Type::String => write!(f, "String"),
@@ -130,6 +133,7 @@ pub enum TypeError {
         expected: usize,
         got: usize,
     },
+    UnsupportedHigherOrderArg { name: String },
 }
 
 impl fmt::Display for TypeError {
@@ -155,6 +159,9 @@ impl fmt::Display for TypeError {
                 got,
             } => {
                 write!(f, "'{name}' expected {expected} args, got {got}")
+            }
+            TypeError::UnsupportedHigherOrderArg { name } => {
+                write!(f, "unsupported higher-order argument in '{name}'")
             }
         }
     }
@@ -200,6 +207,7 @@ pub struct DiagnosticLocation {
 pub struct ReconcileDiagnostic {
     pub note_id: NoteId,
     pub message: String,
+    #[allow(dead_code)]
     pub kind: DiagnosticKind,
     pub severity: DiagnosticSeverity,
     pub location: Option<DiagnosticLocation>,

@@ -10,24 +10,29 @@
 (module
   (policy
     (cycle error)
-    (unknown-status todo)
-    (unknown-checked false))
+    (unknown-status todo))
 
-  (define (effective_checked c)
-    (and (self_truth c)
-         (children_truth c)))
+  (define (child_status c)
+    (if (empty? (children c))
+        done
+        (aggregate_status (map effective_checked (children c)))))
 
-  (define (self_truth c)
+  (define (local_status c)
+    (if (empty? (children c))
+        (observe_checked c)
+        (child_status c)))
+
+  (define (targets_allow? c)
     (if (empty? (targets c))
-        (if (empty? (children c))
-            (observe_checked c)
-            true)
+        true
         (all_done (map target_status (targets c)))))
 
-  (define (children_truth c)
-    (if (empty? (children c))
-        true
-        (eq? (aggregate_status (map effective_checked (children c))) done)))
+  (define (effective_checked c)
+    (if (empty? (targets c))
+        (local_status c)
+        (if (targets_allow? c)
+            (child_status c)
+            todo)))
 
   (define (target_status n)
     (effective_meta n "checklist-status"))

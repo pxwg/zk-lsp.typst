@@ -26,7 +26,6 @@ use crate::dependency_graph;
 use crate::handlers::formatting::{apply_metadata_patch, normalize_note_from_checked};
 
 use self::default_module::load_module;
-use self::eval::eval_all;
 use self::materialize::materialize;
 use self::observe::WorkspaceSnapshot;
 use self::types::{
@@ -166,10 +165,11 @@ fn evaluate_workspace(
         &config.zk_config.reconcile_rules,
         config.zk_config.disable_default_reconcile_rules,
     )?;
-    typecheck::type_check_module_with_metadata(&module, &config.zk_config.metadata.fields)
-        .map_err(anyhow::Error::msg)?;
+    let type_info =
+        typecheck::type_check_module_with_metadata(&module, &config.zk_config.metadata.fields)
+            .map_err(anyhow::Error::msg)?;
 
-    let eval_result = eval_all(&module, &snapshot);
+    let eval_result = eval::eval_all_typed(&module, &snapshot, &type_info);
     let diagnostics = build_diagnostics(notes, eval_result.diagnostics.clone());
     Ok((eval_result, diagnostics))
 }
@@ -215,7 +215,6 @@ fn located_eval_diagnostics(
 ) -> Vec<ReconcileDiagnostic> {
     diagnostics
         .into_iter()
-        .filter(|diag| diag.kind != DiagnosticKind::Cycle)
         .map(|mut diag| {
             if diag.location.is_none() {
                 if let Some((path, _)) = notes.get(&diag.note_id) {
@@ -553,6 +552,27 @@ mod tests {
                 .materialized_meta
                 .get(&("2222222222".to_string(), "checklist-status".to_string())),
             Some(&Value::Status(Status::Done))
+        );
+    }
+
+    #[test]
+    fn parent_with_partially_done_children_materializes_wip() {
+        let parent = make_toml_note(
+            "Parent",
+            "2222222222",
+            "none",
+            "- [ ] parent\n  - [x] child 1\n  - [ ] child 2\n",
+        );
+
+        let snap = snapshot_from(&[("2222222222", &parent)]);
+        let module = load_test_module();
+        let result = materialize(eval_all(&module, &snap));
+
+        assert_eq!(
+            result
+                .materialized_meta
+                .get(&("2222222222".to_string(), "checklist-status".to_string())),
+            Some(&Value::Status(Status::Wip))
         );
     }
 

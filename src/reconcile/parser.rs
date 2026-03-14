@@ -1,6 +1,7 @@
 /// S-expression tokenizer + recursive-descent parser for the Reconcile DSL.
 use super::ast::{CyclePolicy, Expr, Module, Policy, Rule};
-use super::types::{ParseError, Status};
+use super::types::{ParseError, Status, Value};
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
 // Tokenizer
@@ -268,16 +269,6 @@ fn parse_policy(p: &mut Parser) -> Result<Policy, ParseError> {
                             })
                         }
                     },
-                    "unknown-checked" => match value.as_str() {
-                        "true" => policy.unknown_checked = true,
-                        "false" => policy.unknown_checked = false,
-                        v => {
-                            return Err(ParseError::InvalidPolicyValue {
-                                key: "unknown-checked".to_string(),
-                                value: v.to_string(),
-                            })
-                        }
-                    },
                     k => return Err(ParseError::InvalidPolicyKey(k.to_string())),
                 }
             }
@@ -336,17 +327,17 @@ fn parse_expr(p: &mut Parser) -> Result<Expr, ParseError> {
             let s = p.next_symbol()?;
             // bool literals
             if s == "true" {
-                return Ok(Expr::BoolLit(true));
+                return Ok(Expr::Lit(Value::Bool(true)));
             }
             if s == "false" {
-                return Ok(Expr::BoolLit(false));
+                return Ok(Expr::Lit(Value::Bool(false)));
             }
             // status literals
             match s.as_str() {
-                "none" => return Ok(Expr::StatusLit(Status::None)),
-                "todo" => return Ok(Expr::StatusLit(Status::Todo)),
-                "wip" => return Ok(Expr::StatusLit(Status::Wip)),
-                "done" => return Ok(Expr::StatusLit(Status::Done)),
+                "none" => return Ok(Expr::Lit(Value::Status(Status::None))),
+                "todo" => return Ok(Expr::Lit(Value::Status(Status::Todo))),
+                "wip" => return Ok(Expr::Lit(Value::Status(Status::Wip))),
+                "done" => return Ok(Expr::Lit(Value::Status(Status::Done))),
                 _ => {}
             }
             Ok(Expr::Var(s))
@@ -356,7 +347,7 @@ fn parse_expr(p: &mut Parser) -> Result<Expr, ParseError> {
                 Token::StringLit(s) => s,
                 _ => unreachable!(),
             };
-            Ok(Expr::StringLit(s))
+            Ok(Expr::Lit(Value::String(Rc::from(s))))
         }
         Token::LParen => {
             p.expect_lparen()?;
@@ -388,32 +379,6 @@ fn parse_expr(p: &mut Parser) -> Result<Expr, ParseError> {
                         then: Box::new(then),
                         else_: Box::new(else_),
                     }
-                }
-                "observe_checked" => {
-                    let arg = parse_expr(p)?;
-                    p.expect_rparen()?;
-                    Expr::ObserveChecked(Box::new(arg))
-                }
-                "observe_meta" => {
-                    let note = parse_expr(p)?;
-                    let path = parse_expr(p)?;
-                    p.expect_rparen()?;
-                    Expr::ObserveMeta(Box::new(note), Box::new(path))
-                }
-                "targets" => {
-                    let arg = parse_expr(p)?;
-                    p.expect_rparen()?;
-                    Expr::Targets(Box::new(arg))
-                }
-                "children" => {
-                    let arg = parse_expr(p)?;
-                    p.expect_rparen()?;
-                    Expr::Children(Box::new(arg))
-                }
-                "local_checkboxes" => {
-                    let arg = parse_expr(p)?;
-                    p.expect_rparen()?;
-                    Expr::LocalCheckboxes(Box::new(arg))
                 }
                 name => {
                     // All other heads → Expr::Call
@@ -451,10 +416,12 @@ mod tests {
     #[test]
     fn valid_default_module() {
         let module = parse_module(DEFAULT_MODULE).expect("default module must parse");
-        assert_eq!(module.rules.len(), 5, "expected 5 rules in default module");
+        assert_eq!(module.rules.len(), 6, "expected 6 rules in default module");
+        assert!(module.rules.iter().any(|r| r.name == "child_status"));
+        assert!(module.rules.iter().any(|r| r.name == "local_status"));
+        assert!(module.rules.iter().any(|r| r.name == "targets_allow?"));
         assert!(module.rules.iter().any(|r| r.name == "effective_checked"));
-        assert!(module.rules.iter().any(|r| r.name == "self_truth"));
-        assert!(module.rules.iter().any(|r| r.name == "children_truth"));
+        assert!(module.rules.iter().any(|r| r.name == "target_status"));
         assert!(module.rules.iter().any(|r| r.name == "effective_meta"));
     }
 
@@ -462,15 +429,13 @@ mod tests {
     fn policy_fields() {
         let src = r#"
         (module
-          (policy
+            (policy
             (cycle unknown)
-            (unknown-status wip)
-            (unknown-checked true)))
+            (unknown-status wip)))
         "#;
         let module = parse_module(src).expect("should parse");
         assert_eq!(module.policy.cycle, CyclePolicy::Unknown);
         assert_eq!(module.policy.unknown_status, Status::Wip);
-        assert!(module.policy.unknown_checked);
     }
 
     #[test]
@@ -514,7 +479,6 @@ mod tests {
         // Default policy
         assert_eq!(module.policy.cycle, CyclePolicy::Error);
         assert_eq!(module.policy.unknown_status, Status::Todo);
-        assert!(!module.policy.unknown_checked);
     }
 
     #[test]
@@ -548,10 +512,13 @@ mod tests {
         "#;
         let module = parse_module(src).expect("should parse");
         match &module.rules[0].body {
-            Expr::Children(inner) => match inner.as_ref() {
-                Expr::Var(name) => assert_eq!(name, "c"),
-                other => panic!("expected var, got {other:?}"),
-            },
+            Expr::Call { name, args } => {
+                assert_eq!(name, "children");
+                match &args[0] {
+                    Expr::Var(name) => assert_eq!(name, "c"),
+                    other => panic!("expected var, got {other:?}"),
+                }
+            }
             other => panic!("expected children expr, got {other:?}"),
         }
     }

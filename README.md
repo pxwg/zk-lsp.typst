@@ -256,7 +256,7 @@ Custom fields are preserved by the parser and included in `note-info` JSON outpu
 
 ### Reconcile rule modules
 
-`zk-lsp reconcile` uses a built-in default DSL module from `examples/rules/checklist.lisp`. You can extend or override it with runtime-loaded Lisp rule files configured in the same config files as hooks.
+`zk-lsp reconcile` uses a built-in default DSL module from `examples/rules/checklist.lisp`. The current engine is a small pure Lisp microkernel: the AST only models literals, variables, `if`, and function calls, while checklist/tree operations are exposed as builtins. You can extend or override the default module with runtime-loaded Lisp rule files configured in the same config files as hooks.
 
 By default, the built-in module provides the standard checklist behavior:
 
@@ -264,6 +264,7 @@ By default, the built-in module provides the standard checklist behavior:
 - `children(c)` returns direct child checklist items in source order
 - ref checkboxes derive from their target notes
 - local non-leaf parents ignore their own `[ ]` / `[x]`; child state determines them
+- partial child completion propagates `wip` through parent checklist items and note status
 - multi-target refs require `all_done`
 - archived notes are forced to `done`
 
@@ -318,6 +319,13 @@ The built-in tree primitive semantics are:
 
 - `local_checkboxes(n)`: all checklist items in note `n`, preserving source order
 - `children(c)`: direct children of checkbox `c` in the same note, preserving source order
+
+The built-in status/value semantics are:
+
+- `observe_checked(c)`: returns a `Status` (`done`/`todo`) rather than a boolean
+- `aggregate_status(xs)`: accepts `List(Status)` and returns a `Status`
+- `empty?`, `all_done`, `eq?`, `not`, `and`, `or`, `done?`, `todo?`, `wip?`, `none?`: return `Bool` for control flow
+- checklist rules should compute in `Status`; `Bool` is reserved for predicates and `if`
 
 `children(c)` uses the parsed checklist tree: items after `c` with deeper indentation, stopping at the first checklist item whose indentation is less than or equal to `c`; only the next indentation layer counts as direct children.
 
@@ -565,8 +573,8 @@ See `lua/zk_hook_types.lua` for the full EmmyLua type reference and `examples/ho
 1. Scans the wiki and builds a workspace snapshot of notes, checkboxes, and typed metadata
 2. Loads the built-in reconcile module
 3. Loads and merges any configured `[[reconcile.rule]]` files from disk
-4. Parses and type-checks the merged module
-5. Evaluates `effective_checked` and `effective_meta` across the workspace
+4. Parses and type-checks the merged module against the builtin function surface
+5. Evaluates `effective_checked` and `effective_meta` across the workspace with unified call-stack cycle detection
 6. Collects reconcile diagnostics with precise file and span locations
 7. If any reconcile diagnostic exists, aborts and reports all of them in Typst-style CLI output
 8. Otherwise writes back changed checkbox states and the materialized `checklist-status`
@@ -577,11 +585,12 @@ The default module reproduces the built-in checklist behavior:
 - `children(c)` exposes direct child checklist items in source order
 - Ref checkboxes derive from their target notes
 - Local non-leaf parents ignore their own `[ ]` / `[x]`; their children decide them
+- Parents with partially complete children become `wip`
 - Ref parents require both their own targets and their direct children to be done
 - Multi-target refs require `all_done`
 - Archived notes are forced to `done`
 
-This behavior is expressed in the default DSL rules, not hard-coded in Rust. Rust provides the observed checklist tree; the module decides how that tree affects `effective_checked` and `checklist-status`.
+This behavior is expressed in the default DSL rules, not hard-coded in Rust. Rust provides the builtin observations (`observe_checked`, `observe_meta`, `targets`, `children`, `local_checkboxes`) and the default module decides how they affect `effective_checked` and `checklist-status`.
 
 If you provide custom rule modules, they replace or extend that default behavior according to the merge rules above.
 

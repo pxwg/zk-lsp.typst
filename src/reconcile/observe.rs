@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::config::{MetadataFieldConfig, MetadataFieldKind};
 use crate::parser::{self, ChecklistItemKind, ChecklistStatus, Relation};
@@ -46,8 +47,14 @@ pub struct WorkspaceSnapshot {
 }
 
 impl WorkspaceSnapshot {
-    pub fn observe_checked(&self, id: &CheckboxId) -> Option<bool> {
-        self.checkboxes.get(id).map(|c| c.checked)
+    pub fn observe_checked(&self, id: &CheckboxId) -> Option<Status> {
+        self.checkboxes.get(id).map(|c| {
+            if c.checked {
+                Status::Done
+            } else {
+                Status::Todo
+            }
+        })
     }
 
     /// Generic metadata observation. Returns `Value::Status` for "checklist-status",
@@ -62,7 +69,7 @@ impl WorkspaceSnapshot {
                     self.metadata_defaults
                         .get(field)
                         .cloned()
-                        .unwrap_or_else(|| Value::String(String::new()))
+                        .unwrap_or_else(|| Value::String(Rc::<str>::from("")))
                 };
             }
         };
@@ -81,7 +88,7 @@ impl WorkspaceSnapshot {
                 .get(field)
                 .cloned()
                 .or_else(|| self.metadata_defaults.get(field).cloned())
-                .unwrap_or_else(|| Value::String(String::new())),
+                .unwrap_or_else(|| Value::String(Rc::<str>::from(""))),
         }
     }
 
@@ -296,19 +303,19 @@ fn flatten_toml_table(
 fn toml_value_to_typed_value(value: &toml::Value, kind: Option<&MetadataFieldKind>) -> Value {
     match kind {
         Some(MetadataFieldKind::Boolean) => Value::Bool(value.as_bool().unwrap_or(false)),
-        Some(MetadataFieldKind::ArrayString) => Value::List(
+        Some(MetadataFieldKind::ArrayString) => Value::List(Rc::new(
             value
                 .as_array()
                 .map(|items| {
                     items
                         .iter()
-                        .filter_map(|item| item.as_str().map(|s| Value::String(s.to_string())))
+                        .filter_map(|item| item.as_str().map(|s| Value::String(Rc::from(s))))
                         .collect()
                 })
                 .unwrap_or_default(),
-        ),
-        Some(MetadataFieldKind::String) => Value::String(toml_value_to_string(value)),
-        None => Value::String(toml_value_to_string(value)),
+        )),
+        Some(MetadataFieldKind::String) => Value::String(Rc::from(toml_value_to_string(value))),
+        None => Value::String(Rc::from(toml_value_to_string(value))),
     }
 }
 
@@ -586,7 +593,7 @@ mod tests {
 
         assert_eq!(
             snap.observe_meta(&"1111111111".to_string(), "user.kind"),
-            Value::String("project".to_string())
+            Value::String("project".into())
         );
         assert_eq!(
             snap.observe_meta(&"1111111111".to_string(), "user.priority"),
@@ -594,10 +601,13 @@ mod tests {
         );
         assert_eq!(
             snap.observe_meta(&"1111111111".to_string(), "user.tags"),
-            Value::List(vec![
-                Value::String("alpha".to_string()),
-                Value::String("beta".to_string())
-            ])
+            Value::List(
+                vec![
+                    Value::String("alpha".into()),
+                    Value::String("beta".into())
+                ]
+                .into()
+            )
         );
     }
 }

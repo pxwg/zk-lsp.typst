@@ -27,7 +27,11 @@ pub fn materialize(eval: EvalResult) -> ReconcileResult {
     ReconcileResult {
         materialized_status,
         materialized_meta: eval.effective_meta,
-        materialized_checked: eval.effective_checked,
+        materialized_checked: eval
+            .effective_checked
+            .into_iter()
+            .map(|(cid, status)| (cid, status == Status::Done))
+            .collect(),
     }
 }
 
