@@ -13,6 +13,7 @@ cargo build          # dev build
 cargo build --release
 cargo test           # 65 tests across parser, formatting, migrate, reconcile, cycle, diagnostics, code_actions, completion, graph_check, context_export
 cargo test <name>    # run a single test by name (substring match)
+cargo fmt            # formatting should be run before every commit
 ```
 
 Zero warnings are expected. Fix all warnings before committing.
