@@ -15,6 +15,7 @@ pub struct CycleEdgeOccurrence {
     pub line: usize,       // 0-based line index
     pub byte_start: u32,   // byte offset of '@' within the line
     pub byte_end: u32,     // byte offset past the last digit
+    #[allow(dead_code)]
     pub line_text: String, // full line text for display
 }
 

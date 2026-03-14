@@ -11,6 +11,7 @@ use crate::dependency_graph::{CycleEdgeOccurrence, DependencyGraph};
 
 #[derive(Debug)]
 pub struct DependencyCycle {
+    #[allow(dead_code)]
     pub nodes: Vec<String>,              // note IDs forming the cycle
     pub edges: Vec<CycleEdgeOccurrence>, // positioned occurrences within this cycle
 }
@@ -128,6 +129,7 @@ pub fn detect_cycles(graph: &DependencyGraph) -> Vec<DependencyCycle> {
 ///
 /// Column numbers are 1-based byte offsets (not UTF-16; use `byte_to_utf16` for LSP).
 /// ANSI colours are emitted only when stderr is a TTY.
+#[allow(dead_code)]
 pub fn render_cycle_errors(cycles: &[DependencyCycle]) -> String {
     let color = std::io::stderr().is_terminal();
     let mut out = String::new();
@@ -201,6 +203,7 @@ pub fn render_cycle_errors(cycles: &[DependencyCycle]) -> String {
 }
 
 /// Count terminal display columns for `s` (CJK chars = 2 columns, others = 1).
+#[allow(dead_code)]
 fn display_width(s: &str) -> usize {
     s.width()
 }
