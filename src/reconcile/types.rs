@@ -1,5 +1,6 @@
-/// Core types for the Reconcile DSL v1.
 use std::fmt;
+/// Core types for the Reconcile DSL v1.
+use std::path::PathBuf;
 
 pub type NoteId = String;
 
@@ -180,6 +181,20 @@ impl fmt::Display for EvalError {
 pub enum DiagnosticKind {
     Cycle,
     EvalFallback,
+    NonLeafRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticLocation {
+    pub file_path: PathBuf,
+    pub line: usize,
+    pub byte_start: u32,
+    pub byte_end: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -187,4 +202,6 @@ pub struct ReconcileDiagnostic {
     pub note_id: NoteId,
     pub message: String,
     pub kind: DiagnosticKind,
+    pub severity: DiagnosticSeverity,
+    pub location: Option<DiagnosticLocation>,
 }

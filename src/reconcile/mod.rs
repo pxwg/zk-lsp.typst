@@ -14,23 +14,31 @@ pub mod typecheck;
 pub mod types;
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use unicode_width::UnicodeWidthStr;
 
 use crate::config::WikiConfig;
+use crate::cycle;
+use crate::dependency_graph;
 use crate::handlers::formatting::{apply_metadata_patch, normalize_note_from_checked};
+use crate::parser as note_parser;
 
 use self::default_module::load_module;
 use self::eval::eval_all;
 use self::materialize::materialize;
 use self::observe::WorkspaceSnapshot;
-use self::types::{NoteId, Value};
+use self::types::{
+    DiagnosticKind, DiagnosticLocation, DiagnosticSeverity, NoteId, ReconcileDiagnostic, Value,
+};
 
 // ---------------------------------------------------------------------------
 // Public stats
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 pub struct ReconcileStats {
     pub files_changed: usize,
 }
@@ -40,39 +48,14 @@ pub struct ReconcileStats {
 // ---------------------------------------------------------------------------
 
 pub async fn run_reconcile(config: &WikiConfig, dry_run: bool) -> Result<ReconcileStats> {
-    // 1. Scan notes
     let notes = scan_notes(&config.note_dir).await?;
+    let (eval_result, diagnostics) = evaluate_workspace(&notes, config)?;
 
-    // 2. Build workspace snapshot from already-scanned notes (avoids double I/O).
-    //    Cycle detection is handled by the evaluator via visiting_meta / CyclePolicy.
-    let snapshot =
-        WorkspaceSnapshot::from_note_map_with_metadata(&notes, &config.zk_config.metadata.fields);
-
-    // 3. Load, parse, and type-check the reconcile module.
-    let module = load_module(
-        &config.zk_config.reconcile_rules,
-        config.zk_config.disable_default_reconcile_rules,
-    )?;
-    typecheck::type_check_module_with_metadata(&module, &config.zk_config.metadata.fields)
-        .map_err(anyhow::Error::msg)?;
-
-    // 4. Evaluate
-    let eval_result = eval_all(&module, &snapshot);
-
-    // 5. Materialize
-    let reconcile_result = materialize(eval_result);
-
-    // 5b. Report diagnostics
-    for diag in &reconcile_result.diagnostics {
-        tracing::warn!(
-            note = %diag.note_id,
-            kind = ?diag.kind,
-            "reconcile diagnostic: {}",
-            diag.message
-        );
+    if !diagnostics.is_empty() {
+        return Err(anyhow::anyhow!(render_diagnostics(&diagnostics, &notes)));
     }
 
-    // 6. Write-back: for each note, apply pre-evaluated checkbox truth and write atomically if changed
+    let reconcile_result = materialize(eval_result);
     let mut files_changed = 0usize;
     for (_id, (path, content)) in &notes {
         let checked_by_line: HashMap<usize, bool> = reconcile_result
@@ -99,6 +82,29 @@ pub async fn run_reconcile(config: &WikiConfig, dry_run: bool) -> Result<Reconci
     }
 
     Ok(ReconcileStats { files_changed })
+}
+
+pub async fn collect_diagnostics(
+    config: &WikiConfig,
+    overlay: Option<(&std::path::Path, &str)>,
+) -> Result<Vec<ReconcileDiagnostic>> {
+    let mut notes = scan_notes(&config.note_dir).await?;
+
+    if let Some((path, content)) = overlay {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("typ") {
+            if let Some(note_id) = path.file_stem().and_then(|stem| stem.to_str()) {
+                if note_id.len() == 10 && note_id.chars().all(|c| c.is_ascii_digit()) {
+                    notes.insert(
+                        note_id.to_string(),
+                        (path.to_path_buf(), content.to_string()),
+                    );
+                }
+            }
+        }
+    }
+
+    let (_, diagnostics) = evaluate_workspace(&notes, config)?;
+    Ok(diagnostics)
 }
 
 fn apply_materialized_status(
@@ -151,6 +157,199 @@ async fn scan_notes(note_dir: &std::path::Path) -> Result<HashMap<NoteId, (PathB
     Ok(map)
 }
 
+fn evaluate_workspace(
+    notes: &HashMap<NoteId, (PathBuf, String)>,
+    config: &WikiConfig,
+) -> Result<(eval::EvalResult, Vec<ReconcileDiagnostic>)> {
+    let snapshot =
+        WorkspaceSnapshot::from_note_map_with_metadata(notes, &config.zk_config.metadata.fields);
+    let module = load_module(
+        &config.zk_config.reconcile_rules,
+        config.zk_config.disable_default_reconcile_rules,
+    )?;
+    typecheck::type_check_module_with_metadata(&module, &config.zk_config.metadata.fields)
+        .map_err(anyhow::Error::msg)?;
+
+    let eval_result = eval_all(&module, &snapshot);
+    let diagnostics = build_diagnostics(notes, eval_result.diagnostics.clone());
+    Ok((eval_result, diagnostics))
+}
+
+fn build_diagnostics(
+    notes: &HashMap<NoteId, (PathBuf, String)>,
+    eval_diagnostics: Vec<ReconcileDiagnostic>,
+) -> Vec<ReconcileDiagnostic> {
+    let graph = dependency_graph::build_dependency_graph(notes);
+    let cycles = cycle::detect_cycles(&graph);
+    let mut diagnostics = cycle_diagnostics(&cycles);
+    diagnostics.extend(non_leaf_ref_diagnostics(notes));
+    diagnostics.extend(located_eval_diagnostics(eval_diagnostics, notes));
+    diagnostics
+}
+
+fn cycle_diagnostics(cycles: &[cycle::DependencyCycle]) -> Vec<ReconcileDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for cycle in cycles {
+        for edge in &cycle.edges {
+            diagnostics.push(ReconcileDiagnostic {
+                note_id: edge.from_note_id.clone(),
+                message: format!(
+                    "Cyclic task dependency: {} -> ... -> {}",
+                    edge.from_note_id, edge.from_note_id
+                ),
+                kind: DiagnosticKind::Cycle,
+                severity: DiagnosticSeverity::Error,
+                location: Some(DiagnosticLocation {
+                    file_path: edge.file_path.clone(),
+                    line: edge.line,
+                    byte_start: edge.byte_start,
+                    byte_end: edge.byte_end,
+                }),
+            });
+        }
+    }
+    diagnostics
+}
+
+fn non_leaf_ref_diagnostics(
+    notes: &HashMap<NoteId, (PathBuf, String)>,
+) -> Vec<ReconcileDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    for (note_id, (path, content)) in notes {
+        let items = note_parser::parse_checklist_items(content);
+        let lines: Vec<&str> = content.lines().collect();
+
+        for (i, item) in items.iter().enumerate() {
+            let note_parser::ChecklistItemKind::Ref { targets } = &item.kind else {
+                continue;
+            };
+            let is_non_leaf = i + 1 < items.len() && items[i + 1].indent > item.indent;
+            if !is_non_leaf {
+                continue;
+            }
+
+            let line_text = lines.get(item.line_idx).copied().unwrap_or("");
+            let (start_byte, end_byte) = targets
+                .first()
+                .zip(targets.last())
+                .map(|(first, last)| (first.byte_start, last.byte_end))
+                .unwrap_or((0, line_text.len() as u32));
+
+            diagnostics.push(ReconcileDiagnostic {
+                note_id: note_id.clone(),
+                message: "Ref item has child items; @ID targets will be semantically ignored (only leaf items are source facts)".to_string(),
+                kind: DiagnosticKind::NonLeafRef,
+                severity: DiagnosticSeverity::Error,
+                location: Some(DiagnosticLocation {
+                    file_path: path.clone(),
+                    line: item.line_idx,
+                    byte_start: start_byte,
+                    byte_end: end_byte,
+                }),
+            });
+        }
+    }
+
+    diagnostics
+}
+
+fn located_eval_diagnostics(
+    diagnostics: Vec<ReconcileDiagnostic>,
+    notes: &HashMap<NoteId, (PathBuf, String)>,
+) -> Vec<ReconcileDiagnostic> {
+    diagnostics
+        .into_iter()
+        .filter(|diag| diag.kind != DiagnosticKind::Cycle)
+        .map(|mut diag| {
+            if diag.location.is_none() {
+                if let Some((path, _)) = notes.get(&diag.note_id) {
+                    diag.location = Some(DiagnosticLocation {
+                        file_path: path.clone(),
+                        line: 0,
+                        byte_start: 0,
+                        byte_end: 0,
+                    });
+                }
+            }
+            diag
+        })
+        .collect()
+}
+
+fn render_diagnostics(
+    diagnostics: &[ReconcileDiagnostic],
+    notes: &HashMap<NoteId, (PathBuf, String)>,
+) -> String {
+    let color = std::io::stderr().is_terminal();
+    let mut out = String::new();
+
+    for diag in diagnostics {
+        if color {
+            out.push_str("\x1b[1;31merror\x1b[0m");
+            out.push_str("\x1b[1m: ");
+            out.push_str(&diag.message);
+            out.push_str("\x1b[0m\n");
+        } else {
+            out.push_str("error: ");
+            out.push_str(&diag.message);
+            out.push('\n');
+        }
+
+        let Some(location) = &diag.location else {
+            out.push('\n');
+            continue;
+        };
+
+        let line_1based = location.line + 1;
+        let col_1based = location.byte_start + 1;
+        let line_text = notes
+            .get(&diag.note_id)
+            .and_then(|(_, content)| content.lines().nth(location.line).map(str::to_string))
+            .or_else(|| {
+                std::fs::read_to_string(&location.file_path)
+                    .ok()
+                    .and_then(|content| content.lines().nth(location.line).map(str::to_string))
+            })
+            .unwrap_or_default();
+
+        let lnum_w = format!("{line_1based}").len();
+        let pad = " ".repeat(lnum_w);
+        let prefix_bytes = (location.byte_start as usize).min(line_text.len());
+        let end_bytes = (location.byte_end as usize).min(line_text.len());
+        let display_col = display_width(&line_text[..prefix_bytes]);
+        let underline_disp = display_width(&line_text[prefix_bytes..end_bytes]).max(1);
+        let underline = "^".repeat(underline_disp);
+        let pointer_spaces = " ".repeat(display_col);
+        let path = location.file_path.display();
+
+        if color {
+            out.push_str(&format!(
+                " \x1b[1;34m{pad}┌─\x1b[0m \x1b[36m{path}:{line_1based}:{col_1based}\x1b[0m\n"
+            ));
+            out.push_str(&format!(" \x1b[1;34m{pad}│\x1b[0m\n"));
+            out.push_str(&format!(
+                "\x1b[1;34m{line_1based:>lnum_w$} │\x1b[0m {line_text}\n"
+            ));
+            out.push_str(&format!(
+                " \x1b[1;34m{pad}│\x1b[0m {pointer_spaces}\x1b[1;31m{underline}\x1b[0m\n"
+            ));
+        } else {
+            out.push_str(&format!(" {pad}┌─ {path}:{line_1based}:{col_1based}\n"));
+            out.push_str(&format!(" {pad}│\n"));
+            out.push_str(&format!("{line_1based:>lnum_w$} │ {line_text}\n"));
+            out.push_str(&format!(" {pad}│ {pointer_spaces}{underline}\n"));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+fn display_width(s: &str) -> usize {
+    s.width()
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests
 // ---------------------------------------------------------------------------
@@ -161,11 +360,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::reconcile::default_module::DEFAULT_MODULE;
+    use crate::reconcile::default_module::load_module;
     use crate::reconcile::eval::eval_all;
     use crate::reconcile::observe::WorkspaceSnapshot;
-    use crate::reconcile::parser::parse_module;
-    use crate::reconcile::types::{DiagnosticKind, Status, Value};
+    use crate::reconcile::types::{DiagnosticKind, DiagnosticSeverity, Status, Value};
 
     fn make_toml_note(title: &str, id: &str, status: &str, body: &str) -> String {
         format!(
@@ -199,6 +397,43 @@ mod tests {
         WorkspaceSnapshot::from_note_map(&map)
     }
 
+    fn note_map(notes: &[(&str, String)]) -> HashMap<NoteId, (PathBuf, String)> {
+        notes
+            .iter()
+            .map(|(id, content)| {
+                (
+                    id.to_string(),
+                    (PathBuf::from(format!("{id}.typ")), content.clone()),
+                )
+            })
+            .collect()
+    }
+
+    fn test_rule_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("rules")
+            .join("checklist.lisp")
+    }
+
+    fn load_test_module() -> ast::Module {
+        load_module(&[test_rule_path()], true).expect("load rule file")
+    }
+
+    fn make_test_config(root: PathBuf) -> WikiConfig {
+        let note_dir = root.join("note");
+        WikiConfig {
+            root,
+            note_dir,
+            link_file: PathBuf::from("link.typ"),
+            zk_config: crate::config::ZkLspConfig {
+                reconcile_rules: vec![test_rule_path()],
+                disable_default_reconcile_rules: true,
+                ..Default::default()
+            },
+        }
+    }
+
     #[test]
     fn full_pipeline_multi_note_dag() {
         // A done → B refs A → C refs B; expect all Done
@@ -207,7 +442,7 @@ mod tests {
         let c = make_toml_note("C", "3030303030", "none", "- [ ] @2020202020\n");
 
         let snap = snapshot_from(&[("1010101010", &a), ("2020202020", &b), ("3030303030", &c)]);
-        let module = parse_module(DEFAULT_MODULE).expect("parse");
+        let module = load_test_module();
         let eval_result = eval_all(&module, &snap);
         let result = materialize(eval_result);
 
@@ -358,7 +593,7 @@ mod tests {
         let a = make_toml_note("A", "1111111111", "none", "- [ ] @2222222222\n");
         let b = make_toml_note("B", "2222222222", "none", "- [ ] @1111111111\n");
         let snap = snapshot_from(&[("1111111111", &a), ("2222222222", &b)]);
-        let module = parse_module(DEFAULT_MODULE).expect("parse");
+        let module = load_test_module();
         let result = eval_all(&module, &snap);
         assert!(
             result
@@ -370,10 +605,206 @@ mod tests {
     }
 
     #[test]
+    fn cycle_diagnostics_include_source_locations() {
+        let notes = note_map(&[
+            (
+                "1111111111",
+                make_toml_note("A", "1111111111", "none", "- [ ] @2222222222\n"),
+            ),
+            (
+                "2222222222",
+                make_toml_note("B", "2222222222", "none", "- [ ] @1111111111\n"),
+            ),
+        ]);
+
+        let graph = dependency_graph::build_dependency_graph(&notes);
+        let diagnostics = cycle_diagnostics(&cycle::detect_cycles(&graph));
+
+        assert!(!diagnostics.is_empty());
+        assert!(diagnostics.iter().all(|diag| diag.location.is_some()));
+        assert!(diagnostics
+            .iter()
+            .all(|diag| diag.severity == DiagnosticSeverity::Error));
+    }
+
+    #[test]
+    fn non_leaf_ref_diagnostics_include_source_locations() {
+        let notes = note_map(&[(
+            "1111111111",
+            make_toml_note(
+                "A",
+                "1111111111",
+                "none",
+                "- [ ] @2222222222\n  - [ ] child\n",
+            ),
+        )]);
+
+        let diagnostics = non_leaf_ref_diagnostics(&notes);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].kind, DiagnosticKind::NonLeafRef);
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert!(diagnostics[0].location.is_some());
+    }
+
+    #[tokio::test]
+    async fn collect_diagnostics_loads_rule_file_and_reports_cycle_locations() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("zk_reconcile_diag_cycle_{suffix}"));
+        let note_dir = root.join("note");
+        std::fs::create_dir_all(&note_dir).expect("create note dir");
+
+        let note_a = note_dir.join("1111111111.typ");
+        let note_b = note_dir.join("2222222222.typ");
+        std::fs::write(
+            &note_a,
+            make_toml_note("A", "1111111111", "none", "- [ ] @2222222222\n"),
+        )
+        .expect("write note a");
+        std::fs::write(
+            &note_b,
+            make_toml_note("B", "2222222222", "none", "- [ ] @1111111111\n"),
+        )
+        .expect("write note b");
+
+        let config = make_test_config(root.clone());
+        let diagnostics = collect_diagnostics(&config, None)
+            .await
+            .expect("collect diagnostics");
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.kind == DiagnosticKind::Cycle
+                && diag
+                    .location
+                    .as_ref()
+                    .map(|loc| loc.file_path == note_a)
+                    .unwrap_or(false)
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn collect_diagnostics_loads_rule_file_and_reports_non_leaf_ref_locations() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("zk_reconcile_diag_non_leaf_{suffix}"));
+        let note_dir = root.join("note");
+        std::fs::create_dir_all(&note_dir).expect("create note dir");
+
+        let note = note_dir.join("1111111111.typ");
+        std::fs::write(
+            &note,
+            make_toml_note(
+                "A",
+                "1111111111",
+                "none",
+                "- [ ] @2222222222\n  - [ ] child\n",
+            ),
+        )
+        .expect("write note");
+
+        let config = make_test_config(root.clone());
+        let diagnostics = collect_diagnostics(&config, None)
+            .await
+            .expect("collect diagnostics");
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.kind == DiagnosticKind::NonLeafRef
+                && diag
+                    .location
+                    .as_ref()
+                    .map(|loc| loc.file_path == note)
+                    .unwrap_or(false)
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn run_reconcile_returns_typst_style_cycle_errors_for_all_nodes() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("zk_reconcile_cli_cycle_{suffix}"));
+        let note_dir = root.join("note");
+        std::fs::create_dir_all(&note_dir).expect("create note dir");
+
+        let note_a = note_dir.join("1111111111.typ");
+        let note_b = note_dir.join("2222222222.typ");
+        std::fs::write(
+            &note_a,
+            make_toml_note("A", "1111111111", "none", "- [ ] @2222222222\n"),
+        )
+        .expect("write note a");
+        std::fs::write(
+            &note_b,
+            make_toml_note("B", "2222222222", "none", "- [ ] @1111111111\n"),
+        )
+        .expect("write note b");
+
+        let config = make_test_config(root.clone());
+        let err = run_reconcile(&config, true)
+            .await
+            .expect_err("cycle should fail");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("error: Cyclic task dependency"));
+        assert!(rendered.contains(&note_a.display().to_string()));
+        assert!(rendered.contains(&note_b.display().to_string()));
+        assert!(rendered.contains("┌─"));
+        assert!(rendered.contains("^"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn run_reconcile_returns_typst_style_non_leaf_ref_errors() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("zk_reconcile_cli_non_leaf_{suffix}"));
+        let note_dir = root.join("note");
+        std::fs::create_dir_all(&note_dir).expect("create note dir");
+
+        let note = note_dir.join("1111111111.typ");
+        std::fs::write(
+            &note,
+            make_toml_note(
+                "A",
+                "1111111111",
+                "none",
+                "- [ ] @2222222222\n  - [ ] child\n",
+            ),
+        )
+        .expect("write note");
+
+        let config = make_test_config(root.clone());
+        let err = run_reconcile(&config, true)
+            .await
+            .expect_err("non-leaf ref should fail");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("error: Ref item has child items"));
+        assert!(rendered.contains(&note.display().to_string()));
+        assert!(rendered.contains("┌─"));
+        assert!(rendered.contains("^"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn materialized_meta_drives_status_writeback() {
         let note = make_toml_note("A", "1111111111", "none", "- [x] finished\n");
         let snap = snapshot_from(&[("1111111111", &note)]);
-        let module = parse_module(DEFAULT_MODULE).expect("parse");
+        let module = load_test_module();
         let result = materialize(eval_all(&module, &snap));
 
         let updated = apply_materialized_status("1111111111", &note, &result).expect("status edit");

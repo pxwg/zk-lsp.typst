@@ -20,9 +20,8 @@ pub fn load_module(rule_paths: &[PathBuf], disable_default_rules: bool) -> Resul
     };
 
     for path in rule_paths {
-        let source = std::fs::read_to_string(path).with_context(|| {
-            format!("failed to read reconcile rule file '{}'", path.display())
-        })?;
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read reconcile rule file '{}'", path.display()))?;
         let overlay = parse_module(&source).map_err(|err| {
             anyhow::anyhow!(
                 "failed to parse reconcile rule file '{}': {err}",
@@ -49,7 +48,10 @@ fn merge_modules(mut base: Module, overlay: Module) -> Module {
 }
 
 fn upsert_rule(rules: &mut Vec<Rule>, rule: Rule) {
-    if let Some(existing) = rules.iter_mut().find(|candidate| candidate.name == rule.name) {
+    if let Some(existing) = rules
+        .iter_mut()
+        .find(|candidate| candidate.name == rule.name)
+    {
         *existing = rule;
     } else {
         rules.push(rule);
@@ -65,7 +67,10 @@ mod tests {
     #[test]
     fn default_module_used_when_no_runtime_rule_is_configured() {
         let module = load_module(&[], false).expect("load");
-        assert!(module.rules.iter().any(|rule| rule.name == "effective_meta"));
+        assert!(module
+            .rules
+            .iter()
+            .any(|rule| rule.name == "effective_meta"));
     }
 
     #[test]
@@ -185,8 +190,14 @@ mod tests {
         .expect("write");
 
         let loaded = load_module(&[path], true).expect("load");
-        assert!(loaded.rules.iter().any(|rule| rule.name == "effective_checked"));
-        assert!(loaded.rules.iter().any(|rule| rule.name == "effective_meta"));
+        assert!(loaded
+            .rules
+            .iter()
+            .any(|rule| rule.name == "effective_checked"));
+        assert!(loaded
+            .rules
+            .iter()
+            .any(|rule| rule.name == "effective_meta"));
         assert!(matches!(
             loaded.policy.cycle,
             crate::reconcile::ast::CyclePolicy::Unknown

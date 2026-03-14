@@ -81,10 +81,16 @@ async fn main() -> anyhow::Result<()> {
                 stats.migrated, stats.already_current, stats.skipped
             );
         }
-        Command::Reconcile { dry_run } => {
-            let stats = reconcile::run_reconcile(&config, dry_run).await?;
-            eprintln!("Reconcile: {} file(s) changed", stats.files_changed);
-        }
+        Command::Reconcile { dry_run } => match reconcile::run_reconcile(&config, dry_run).await {
+            Ok(stats) => eprintln!("Reconcile: {} file(s) changed", stats.files_changed),
+            Err(err) => {
+                eprint!("{err}");
+                if !err.to_string().ends_with('\n') {
+                    eprintln!();
+                }
+                std::process::exit(1);
+            }
+        },
         Command::Export { id, depth, inverse } => {
             let out = context_export::export_context(&id, depth, inverse, &config).await?;
             print!("{out}");

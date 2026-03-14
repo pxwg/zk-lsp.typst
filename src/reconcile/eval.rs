@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use super::ast::{CyclePolicy, Expr, Module};
 use super::observe::WorkspaceSnapshot;
 use super::types::{
-    CheckboxId, DiagnosticKind, EvalError, NoteId, ReconcileDiagnostic, Status, Value,
+    CheckboxId, DiagnosticKind, DiagnosticSeverity, EvalError, NoteId, ReconcileDiagnostic, Status,
+    Value,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,8 @@ impl<'a> Evaluator<'a> {
                     note_id: note_id.clone(),
                     message: format!("cycle detected while evaluating {field} of note {note_id}"),
                     kind: DiagnosticKind::Cycle,
+                    severity: DiagnosticSeverity::Error,
+                    location: None,
                 });
             }
             return self.unknown_meta_value(field);
@@ -89,6 +92,8 @@ impl<'a> Evaluator<'a> {
                         message: "effective_meta returned non-Status for checklist-status"
                             .to_string(),
                         kind: DiagnosticKind::EvalFallback,
+                        severity: DiagnosticSeverity::Error,
+                        location: None,
                     });
                     self.unknown_meta_value(field)
                 }
@@ -98,6 +103,8 @@ impl<'a> Evaluator<'a> {
                         note_id: note_id.clone(),
                         message: format!("eval error in effective_meta: {e}"),
                         kind: DiagnosticKind::EvalFallback,
+                        severity: DiagnosticSeverity::Error,
+                        location: None,
                     });
                     self.unknown_meta_value(field)
                 }

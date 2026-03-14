@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use super::eval::EvalResult;
-use super::types::{CheckboxId, NoteId, ReconcileDiagnostic, Status, Value};
+use super::types::{CheckboxId, NoteId, Status, Value};
 
 /// v1: materialized == effective (identity projection).
 pub struct ReconcileResult {
@@ -11,7 +11,6 @@ pub struct ReconcileResult {
     #[allow(dead_code)]
     pub materialized_meta: HashMap<(NoteId, String), Value>,
     pub materialized_checked: HashMap<CheckboxId, bool>,
-    pub diagnostics: Vec<ReconcileDiagnostic>,
 }
 
 /// v1: identity — materialized == effective.
@@ -29,7 +28,6 @@ pub fn materialize(eval: EvalResult) -> ReconcileResult {
         materialized_status,
         materialized_meta: eval.effective_meta,
         materialized_checked: eval.effective_checked,
-        diagnostics: eval.diagnostics,
     }
 }
 
@@ -81,6 +79,5 @@ mod tests {
                 .get(&("1111111111".to_string(), "checklist-status".to_string())),
             Some(&Value::Status(Status::Done))
         );
-        assert!(result.diagnostics.is_empty());
     }
 }

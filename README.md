@@ -445,8 +445,11 @@ The server advertises these capabilities:
 | `@ID` references an archived note | Warning | `Note @ID is archived. New version: @ALT` |
 | `@ID` references a legacy note | Info | `Note @ID is legacy. Newer insights: @EVO` |
 | `@ID` participates in a cyclic dependency | Error | `cyclic task dependency detected` |
+| Ref checklist item has child items, so its `@ID` targets would be ignored semantically | Error | `Ref item has child items; @ID targets will be semantically ignored` |
 
 **Legacy suppression**: if a legacy reference is immediately followed by its evolution ID on the same line (`@old @new`), the diagnostic is suppressed.
+
+`reconcile`-driven diagnostics are position-aware and shared between the LSP and CLI paths. When a workspace-wide reconcile error involves multiple source locations, `zk-lsp` reports all of them so the problem is visible from any participating note or `@ID` occurrence.
 
 ## Tag Formatter and Task Checker
 
@@ -532,7 +535,9 @@ See `lua/zk_hook_types.lua` for the full EmmyLua type reference and `examples/ho
 3. Loads and merges any configured `[[reconcile.rule]]` files from disk
 4. Parses and type-checks the merged module
 5. Evaluates `effective_checked` and `effective_meta` across the workspace
-6. Writes back changed checkbox states and the materialized `checklist-status`
+6. Collects reconcile diagnostics with precise file and span locations
+7. If any reconcile diagnostic exists, aborts and reports all of them in Typst-style CLI output
+8. Otherwise writes back changed checkbox states and the materialized `checklist-status`
 
 The default module reproduces the built-in checklist behavior:
 
@@ -593,7 +598,15 @@ Cyclic dependencies of sub-tasks are not allowed: it makes no sense for such con
 // Note B
 - [ ] Task B.1 @A
 ```
-In this case, `zk-lsp` will report a hard error with the involved file locations when you run `reconcile`, and the LSP server will report an error diagnostic on every involved `@ID` reference.
+In this case, `zk-lsp` will report hard errors for every involved `@ID` occurrence. The LSP server surfaces an error diagnostic on each participating reference, and `zk-lsp reconcile` exits with Typst-style error output covering all involved source locations, for example:
+
+```text
+error: Cyclic task dependency: 1111111111 -> ... -> 1111111111
+   ┌─ ./note/1111111111.typ:18:7
+   │
+18 │ - [ ] @2222222222
+   │       ^^^^^^^^^^^
+```
 
 ## Environment
 

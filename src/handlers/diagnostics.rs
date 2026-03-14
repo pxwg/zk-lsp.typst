@@ -3,9 +3,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tower_lsp::lsp_types::*;
 
-use crate::cycle::DependencyCycle;
 use crate::index::NoteIndex;
 use crate::parser;
+use crate::reconcile::types::{DiagnosticSeverity as ReconcileSeverity, ReconcileDiagnostic};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticData {
@@ -441,84 +441,42 @@ pub fn get_orphan_diagnostic(
 /// A RefItem (`- [ ] @ID`) must always be a leaf. If it has child items (next item
 /// with strictly greater indent), the @ID targets will be semantically ignored by
 /// the leaf rule, silently breaking the dependency.
-pub fn get_checklist_diagnostics(content: &str) -> Vec<Diagnostic> {
-    let items = parser::parse_checklist_items(content);
-    let lines: Vec<&str> = content.lines().collect();
+pub fn get_reconcile_diagnostics(
+    content: &str,
+    file_path: &std::path::Path,
+    reconcile_diagnostics: &[ReconcileDiagnostic],
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    for (i, item) in items.iter().enumerate() {
-        let parser::ChecklistItemKind::Ref { targets } = &item.kind else {
+    for diag in reconcile_diagnostics {
+        let Some(location) = &diag.location else {
             continue;
         };
-        let is_non_leaf = i + 1 < items.len() && items[i + 1].indent > item.indent;
-        if !is_non_leaf {
+        if location.file_path != file_path {
             continue;
         }
 
-        let line_text = lines.get(item.line_idx).copied().unwrap_or("");
-        let (start_byte, end_byte) = targets
-            .first()
-            .zip(targets.last())
-            .map(|(f, l)| (f.byte_start as usize, l.byte_end as usize))
-            .unwrap_or((0, line_text.len()));
-
+        let line_text = content.lines().nth(location.line).unwrap_or("");
         diagnostics.push(Diagnostic {
             range: Range {
                 start: Position {
-                    line: item.line_idx as u32,
-                    character: parser::byte_to_utf16(line_text, start_byte),
+                    line: location.line as u32,
+                    character: parser::byte_to_utf16(line_text, location.byte_start as usize),
                 },
                 end: Position {
-                    line: item.line_idx as u32,
-                    character: parser::byte_to_utf16(line_text, end_byte),
+                    line: location.line as u32,
+                    character: parser::byte_to_utf16(line_text, location.byte_end as usize),
                 },
             },
-            severity: Some(DiagnosticSeverity::WARNING),
+            severity: Some(match diag.severity {
+                ReconcileSeverity::Error => DiagnosticSeverity::ERROR,
+            }),
             source: Some("zk-lsp".into()),
-            message: "Ref item has child items; @ID targets will be semantically ignored (only leaf items are source facts)".into(),
+            message: diag.message.clone(),
             ..Default::default()
         });
     }
-    diagnostics
-}
 
-/// Generate LSP diagnostics for `@ID` occurrences that participate in cycles.
-///
-/// Filters `cycles` to only occurrences whose `file_path` matches `file_path`.
-/// Uses `byte_to_utf16` for correct LSP `character` positions (not raw byte offsets).
-pub fn get_cycle_diagnostics(
-    content: &str,
-    file_path: &std::path::Path,
-    cycles: &[DependencyCycle],
-) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for cycle in cycles {
-        for occ in &cycle.edges {
-            if occ.file_path != file_path {
-                continue;
-            }
-            let line_text = content.lines().nth(occ.line).unwrap_or("");
-            diagnostics.push(Diagnostic {
-                range: Range {
-                    start: Position {
-                        line: occ.line as u32,
-                        character: parser::byte_to_utf16(line_text, occ.byte_start as usize),
-                    },
-                    end: Position {
-                        line: occ.line as u32,
-                        character: parser::byte_to_utf16(line_text, occ.byte_end as usize),
-                    },
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("zk-lsp".into()),
-                message: format!(
-                    "Cyclic task dependency: {} → … → {}",
-                    occ.from_note_id, occ.from_note_id
-                ),
-                ..Default::default()
-            });
-        }
-    }
     diagnostics
 }
 
@@ -526,8 +484,6 @@ pub fn get_cycle_diagnostics(
 mod tests {
     use super::*;
     use crate::config::WikiConfig;
-    use crate::cycle::DependencyCycle;
-    use crate::dependency_graph::CycleEdgeOccurrence;
     use crate::index::{BacklinkLocation, NoteIndex, NoteInfo};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -679,33 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn test_non_leaf_ref_item_produces_warning() {
-        // - [ ] @1111111111   ← Ref, non-leaf (has child)
-        //   - [ ] description ← Local, leaf
-        let content = "- [ ] @1111111111\n  - [ ] description\n";
-        let diags = get_checklist_diagnostics(content);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
-    }
-
-    #[test]
-    fn test_leaf_ref_item_no_warning() {
-        // - [ ] description   ← Local parent
-        //   - [ ] @1111111111 ← Ref, leaf child
-        let content = "- [ ] description\n  - [ ] @1111111111\n";
-        let diags = get_checklist_diagnostics(content);
-        assert!(diags.is_empty());
-    }
-
-    #[test]
-    fn test_local_parent_no_warning() {
-        // LocalItem with children is fine
-        let content = "- [ ] parent\n  - [ ] child\n";
-        let diags = get_checklist_diagnostics(content);
-        assert!(diags.is_empty());
-    }
-
-    #[test]
     fn test_schema_missing_fields_produce_info_diagnostics() {
         let index = make_index();
         let content = concat!(
@@ -787,54 +716,5 @@ mod tests {
             "/wiki/note/9999999999.typ",
         );
         assert!(diags.is_empty());
-    }
-
-    #[test]
-    fn test_cycle_diagnostic_range() {
-        // Line with CJK to verify byte_to_utf16 is used, not raw bytes
-        // "- [ ] 你好 @1111111111"
-        // indent=0, prefix_len=6
-        // "你好 " = 3+3+1 = 7 bytes, but 3 UTF-16 units
-        // "@1111111111" starts at byte 6+7=13, ends at 6+7+11=24
-        // UTF-16 start = 6 + 2 (你=1, 好=1) + 1 (space) = 9... let me compute:
-        // "- [ ] " = 6 bytes/chars (all ASCII)
-        // "你" = 3 bytes, 1 UTF-16 unit
-        // "好" = 3 bytes, 1 UTF-16 unit
-        // " " = 1 byte, 1 UTF-16 unit
-        // "@1111111111" starts at byte 13, UTF-16 char 9
-        let line_text = "- [ ] 你好 @1111111111";
-        let content = format!("{line_text}\n");
-        // byte offsets: '@' at byte 13, end at byte 24
-        let byte_start = line_text.find('@').unwrap() as u32;
-        let byte_end = byte_start + 11;
-
-        let occ = CycleEdgeOccurrence {
-            from_note_id: "1111111111".to_string(),
-            to_note_id: "2222222222".to_string(),
-            file_path: PathBuf::from("/wiki/note/1111111111.typ"),
-            line: 0,
-            byte_start,
-            byte_end,
-            line_text: line_text.to_string(),
-        };
-        let cycle = DependencyCycle {
-            nodes: vec!["1111111111".into()],
-            edges: vec![occ],
-        };
-
-        let diags = get_cycle_diagnostics(
-            &content,
-            std::path::Path::new("/wiki/note/1111111111.typ"),
-            &[cycle],
-        );
-        assert_eq!(diags.len(), 1);
-        let range = diags[0].range;
-        // UTF-16 start: "- [ ] " (6) + "你好 " (3 units) = 9
-        assert_eq!(
-            range.start.character, 9,
-            "start must be UTF-16 offset, not byte offset"
-        );
-        // UTF-16 end: 9 + 11 = 20
-        assert_eq!(range.end.character, 20);
     }
 }

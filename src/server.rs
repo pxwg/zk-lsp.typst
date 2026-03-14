@@ -11,7 +11,7 @@ use crate::handlers::{
     code_actions, completion, definition, diagnostics, hover, inlay_hints, references,
 };
 use crate::index::NoteIndex;
-use crate::{cycle, dependency_graph, link_gen, note_ops, watcher};
+use crate::{link_gen, note_ops, reconcile, watcher};
 
 pub struct ZkLspServer {
     client: Client,
@@ -29,38 +29,19 @@ impl ZkLspServer {
         }
     }
 
-    async fn workspace_cycles(&self) -> Vec<cycle::DependencyCycle> {
-        let Ok(mut rd) = tokio::fs::read_dir(&self.config.note_dir).await else {
-            return vec![];
-        };
-        let mut notes = std::collections::HashMap::new();
-        while let Some(entry) = rd.next_entry().await.ok().flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("typ") {
-                continue;
-            }
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) if s.len() == 10 && s.chars().all(|c| c.is_ascii_digit()) => s.to_string(),
-                _ => continue,
-            };
-            let Ok(content) = tokio::fs::read_to_string(&path).await else {
-                continue;
-            };
-            notes.insert(stem, (path, content));
-        }
-        let graph = dependency_graph::build_dependency_graph(&notes);
-        cycle::detect_cycles(&graph)
-    }
-
     async fn publish_diagnostics(&self, uri: Url, content: &str) {
-        let cycles = self.workspace_cycles().await;
         let file_path = uri.to_file_path().unwrap_or_default();
         let mut diags = diagnostics::get_diagnostics(content, &self.index, uri.path());
-        diags.extend(diagnostics::get_cycle_diagnostics(
-            content, &file_path, &cycles,
-        ));
         diags.extend(diagnostics::get_schema_diagnostics(content, &self.index));
-        diags.extend(diagnostics::get_checklist_diagnostics(content));
+        if let Ok(reconcile_diags) =
+            reconcile::collect_diagnostics(&self.config, Some((&file_path, content))).await
+        {
+            diags.extend(diagnostics::get_reconcile_diagnostics(
+                content,
+                &file_path,
+                &reconcile_diags,
+            ));
+        }
         if let Some(d) = diagnostics::get_orphan_diagnostic(content, uri.path(), &self.index) {
             diags.push(d);
         }

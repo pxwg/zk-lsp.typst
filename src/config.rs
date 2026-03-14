@@ -524,9 +524,7 @@ default = ""
             disable_default_reconcile_rules: false,
             ..Default::default()
         };
-        assert!(
-            user.disable_default_reconcile_rules || project.disable_default_reconcile_rules
-        );
+        assert!(user.disable_default_reconcile_rules || project.disable_default_reconcile_rules);
 
         let user2 = ZkLspConfig {
             disable_default_reconcile_rules: false,
@@ -536,9 +534,7 @@ default = ""
             disable_default_reconcile_rules: true,
             ..Default::default()
         };
-        assert!(
-            user2.disable_default_reconcile_rules || project2.disable_default_reconcile_rules
-        );
+        assert!(user2.disable_default_reconcile_rules || project2.disable_default_reconcile_rules);
     }
 
     #[test]
