@@ -12,6 +12,9 @@
     (cycle error)
     (unknown-status todo))
 
+  (define (materialized_fields n)
+    (list "checklist-status"))
+
   (define (child_status c)
     (if (empty? (children c))
         done

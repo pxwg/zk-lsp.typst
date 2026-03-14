@@ -133,7 +133,9 @@ pub enum TypeError {
         expected: usize,
         got: usize,
     },
-    UnsupportedHigherOrderArg { name: String },
+    UnsupportedHigherOrderArg {
+        name: String,
+    },
 }
 
 impl fmt::Display for TypeError {

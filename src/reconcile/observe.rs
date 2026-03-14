@@ -24,7 +24,6 @@ pub struct CheckboxObs {
 pub struct NoteObs {
     #[allow(dead_code)]
     pub relation: Relation,
-    pub checklist_status: ChecklistStatus,
     /// Typed metadata values for generic `observe_meta` queries.
     pub raw_meta: HashMap<String, Value>,
 }
@@ -57,39 +56,13 @@ impl WorkspaceSnapshot {
         })
     }
 
-    /// Generic metadata observation. Returns `Value::Status` for "checklist-status",
-    /// typed values for configured metadata fields, and an empty string for unknown fields.
+    /// Generic metadata observation.
     pub fn observe_meta(&self, note_id: &NoteId, field: &str) -> Value {
-        let obs = match self.notes.get(note_id) {
-            Some(o) => o,
-            None => {
-                return if field == "checklist-status" {
-                    Value::Status(Status::None)
-                } else {
-                    self.metadata_defaults
-                        .get(field)
-                        .cloned()
-                        .unwrap_or_else(|| Value::String(Rc::<str>::from("")))
-                };
-            }
-        };
-        match field {
-            "checklist-status" => {
-                let s = match obs.checklist_status {
-                    ChecklistStatus::Done => Status::Done,
-                    ChecklistStatus::Wip => Status::Wip,
-                    ChecklistStatus::Todo => Status::Todo,
-                    ChecklistStatus::None => Status::None,
-                };
-                Value::Status(s)
-            }
-            _ => obs
-                .raw_meta
-                .get(field)
-                .cloned()
-                .or_else(|| self.metadata_defaults.get(field).cloned())
-                .unwrap_or_else(|| Value::String(Rc::<str>::from(""))),
-        }
+        self.notes
+            .get(note_id)
+            .and_then(|obs| obs.raw_meta.get(field).cloned())
+            .or_else(|| self.metadata_defaults.get(field).cloned())
+            .unwrap_or_else(|| Value::String(Rc::<str>::from("")))
     }
 
     #[allow(dead_code)]
@@ -170,16 +143,9 @@ impl WorkspaceSnapshot {
                 (Relation::Active, ChecklistStatus::None)
             };
 
-            let raw_meta = extract_raw_meta(content, &metadata_kinds);
+            let raw_meta = extract_raw_meta(content, &metadata_kinds, checklist_status, &relation);
 
-            note_obs_map.insert(
-                id.clone(),
-                NoteObs {
-                    relation,
-                    checklist_status,
-                    raw_meta,
-                },
-            );
+            note_obs_map.insert(id.clone(), NoteObs { relation, raw_meta });
 
             // Parse checklist items.
             let items = parser::parse_checklist_items(content);
@@ -242,7 +208,7 @@ fn metadata_kind_map(
 }
 
 fn metadata_default_map(metadata_fields: &[MetadataFieldConfig]) -> HashMap<String, Value> {
-    metadata_fields
+    let mut defaults: HashMap<String, Value> = metadata_fields
         .iter()
         .map(|field| {
             (
@@ -250,12 +216,21 @@ fn metadata_default_map(metadata_fields: &[MetadataFieldConfig]) -> HashMap<Stri
                 toml_value_to_typed_value(&field.default, Some(&field.kind)),
             )
         })
-        .collect()
+        .collect();
+    defaults
+        .entry("checklist-status".to_string())
+        .or_insert(Value::Status(Status::None));
+    defaults
+        .entry("relation".to_string())
+        .or_insert(Value::String(Rc::from("active")));
+    defaults
 }
 
 fn extract_raw_meta(
     content: &str,
     metadata_kinds: &HashMap<String, MetadataFieldKind>,
+    checklist_status: ChecklistStatus,
+    relation: &Relation,
 ) -> HashMap<String, Value> {
     let mut raw_meta = HashMap::new();
 
@@ -270,6 +245,23 @@ fn extract_raw_meta(
     };
 
     flatten_toml_table("", table, metadata_kinds, &mut raw_meta);
+    raw_meta.insert(
+        "checklist-status".to_string(),
+        Value::Status(match checklist_status {
+            ChecklistStatus::Done => Status::Done,
+            ChecklistStatus::Wip => Status::Wip,
+            ChecklistStatus::Todo => Status::Todo,
+            ChecklistStatus::None => Status::None,
+        }),
+    );
+    raw_meta.insert(
+        "relation".to_string(),
+        Value::String(Rc::from(match relation {
+            Relation::Archived => "archived",
+            Relation::Active => "active",
+            Relation::Legacy => "legacy",
+        })),
+    );
     raw_meta
 }
 
@@ -601,13 +593,7 @@ mod tests {
         );
         assert_eq!(
             snap.observe_meta(&"1111111111".to_string(), "user.tags"),
-            Value::List(
-                vec![
-                    Value::String("alpha".into()),
-                    Value::String("beta".into())
-                ]
-                .into()
-            )
+            Value::List(vec![Value::String("alpha".into()), Value::String("beta".into())].into())
         );
     }
 }

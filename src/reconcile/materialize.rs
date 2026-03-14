@@ -7,25 +7,13 @@ use super::types::{CheckboxId, NoteId, Status, Value};
 /// v1: materialized == effective (identity projection).
 pub struct ReconcileResult {
     #[allow(dead_code)]
-    pub materialized_status: HashMap<NoteId, Status>,
-    #[allow(dead_code)]
     pub materialized_meta: HashMap<(NoteId, String), Value>,
     pub materialized_checked: HashMap<CheckboxId, bool>,
 }
 
 /// v1: identity — materialized == effective.
 pub fn materialize(eval: EvalResult) -> ReconcileResult {
-    let materialized_status = eval
-        .effective_meta
-        .iter()
-        .filter_map(|((note_id, field), value)| match (field.as_str(), value) {
-            ("checklist-status", Value::Status(status)) => Some((note_id.clone(), status.clone())),
-            _ => None,
-        })
-        .collect();
-
     ReconcileResult {
-        materialized_status,
         materialized_meta: eval.effective_meta,
         materialized_checked: eval
             .effective_checked

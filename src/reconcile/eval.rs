@@ -11,8 +11,6 @@ use super::types::{
 };
 
 pub struct EvalResult {
-    #[allow(dead_code)]
-    pub effective_status: HashMap<NoteId, Status>,
     pub effective_meta: HashMap<(NoteId, String), Value>,
     pub effective_checked: HashMap<CheckboxId, Status>,
     pub diagnostics: Vec<ReconcileDiagnostic>,
@@ -154,6 +152,13 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(Value::List(Rc::new(results)))
             }
+            "list" => {
+                let values = arg_exprs
+                    .iter()
+                    .map(|expr| self.eval_expr(expr, env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Value::List(Rc::new(values)))
+            }
             _ => {
                 let args = arg_exprs
                     .iter()
@@ -239,6 +244,7 @@ impl<'a> Evaluator<'a> {
                     context: "aggregate_status".to_string(),
                 }),
             },
+            "list" => Ok(Value::List(Rc::new(args.to_vec()))),
             "eq?" => match args {
                 [left, right] => Ok(Value::Bool(left == right)),
                 _ => Err(EvalError::TypeMismatch {
@@ -339,7 +345,6 @@ impl<'a> Evaluator<'a> {
             "done?" | "todo?" | "wip?" | "none?" => Type::Bool,
             "observe_checked" | "aggregate_status" => Type::Status,
             "observe_meta" => match args.get(1) {
-                Some(Value::String(field)) if field.as_ref() == "checklist-status" => Type::Status,
                 Some(Value::String(field)) => self
                     .snapshot
                     .metadata_defaults
@@ -350,7 +355,7 @@ impl<'a> Evaluator<'a> {
             },
             "targets" => Type::List(Box::new(Type::NoteRef)),
             "children" | "local_checkboxes" => Type::List(Box::new(Type::CheckboxRef)),
-            "map" => Type::List(Box::new(Type::Any)),
+            "map" | "list" => Type::List(Box::new(Type::Any)),
             _ => self
                 .type_info
                 .rule_return_types
@@ -417,8 +422,8 @@ fn aggregate_status(statuses: &[Status]) -> Status {
 
 #[allow(dead_code)]
 pub fn eval_all(module: &Module, snapshot: &WorkspaceSnapshot) -> EvalResult {
-    let type_info = typecheck::type_check_module(module)
-        .expect("module must typecheck before evaluation");
+    let type_info =
+        typecheck::type_check_module(module).expect("module must typecheck before evaluation");
     eval_all_typed(module, snapshot, &type_info)
 }
 
@@ -429,23 +434,37 @@ pub fn eval_all_typed(
 ) -> EvalResult {
     let mut ev = Evaluator::new(module, snapshot, type_info);
     for note_id in snapshot.all_note_ids() {
-        let status = ev
-            .invoke_function(
-                "effective_meta",
-                vec![
-                    Value::NoteRef(note_id.clone()),
-                    Value::String(Rc::from("checklist-status")),
-                ],
-            )
-            .unwrap_or_else(|_| Value::Status(module.policy.unknown_status.clone()));
-        if !matches!(status, Value::Status(_)) {
+        let fields = ev
+            .invoke_function("materialized_fields", vec![Value::NoteRef(note_id.clone())])
+            .unwrap_or_else(|_| Value::List(Rc::new(Vec::new())));
+        let Value::List(fields) = fields else {
             ev.diagnostics.push(ReconcileDiagnostic {
                 note_id: note_id.clone(),
-                message: "effective_meta returned non-Status for checklist-status".to_string(),
+                message: "materialized_fields returned non-List".to_string(),
                 kind: DiagnosticKind::EvalFallback,
                 severity: DiagnosticSeverity::Error,
                 location: None,
             });
+            continue;
+        };
+        for field in fields.iter() {
+            let Value::String(field_name) = field else {
+                ev.diagnostics.push(ReconcileDiagnostic {
+                    note_id: note_id.clone(),
+                    message: "materialized_fields contains non-String item".to_string(),
+                    kind: DiagnosticKind::EvalFallback,
+                    severity: DiagnosticSeverity::Error,
+                    location: None,
+                });
+                continue;
+            };
+            let _ = ev.invoke_function(
+                "effective_meta",
+                vec![
+                    Value::NoteRef(note_id.clone()),
+                    Value::String(field_name.clone()),
+                ],
+            );
         }
     }
 
@@ -458,20 +477,6 @@ pub fn eval_all_typed(
                     (Value::NoteRef(note_id), Value::String(field)) => {
                         Some(((note_id.clone(), field.to_string()), value.clone()))
                     }
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        })
-        .collect::<HashMap<_, _>>();
-
-    let effective_status = effective_meta
-        .iter()
-        .filter_map(|((note_id, field), value)| {
-            if field == "checklist-status" {
-                match value {
-                    Value::Status(status) => Some((note_id.clone(), status.clone())),
                     _ => None,
                 }
             } else {
@@ -498,7 +503,6 @@ pub fn eval_all_typed(
         .collect::<HashMap<_, _>>();
 
     EvalResult {
-        effective_status,
         effective_meta,
         effective_checked,
         diagnostics: ev.diagnostics,
@@ -571,13 +575,23 @@ mod tests {
         WorkspaceSnapshot::from_note_map(&map)
     }
 
+    fn effective_status(result: &EvalResult, note_id: &str) -> Option<Status> {
+        result
+            .effective_meta
+            .get(&(note_id.to_string(), "checklist-status".to_string()))
+            .and_then(|value| match value {
+                Value::Status(status) => Some(status.clone()),
+                _ => None,
+            })
+    }
+
     #[test]
     fn local_checkboxes_all_done() {
         let content = make_toml_note("A", "1111111111", "none", "- [x] task1\n- [x] task2\n");
         let snap = snapshot_from(&[("1111111111", &content)]);
         let module = default_module();
         let result = eval_all(&module, &snap);
-        assert_eq!(result.effective_status.get("1111111111"), Some(&Status::Done));
+        assert_eq!(effective_status(&result, "1111111111"), Some(Status::Done));
     }
 
     #[test]
@@ -586,7 +600,7 @@ mod tests {
         let snap = snapshot_from(&[("1111111111", &content)]);
         let module = default_module();
         let result = eval_all(&module, &snap);
-        assert_eq!(result.effective_status.get("1111111111"), Some(&Status::Wip));
+        assert_eq!(effective_status(&result, "1111111111"), Some(Status::Wip));
     }
 
     #[test]
@@ -596,7 +610,7 @@ mod tests {
         let snap = snapshot_from(&[("1111111111", &note_a), ("2222222222", &note_b)]);
         let module = default_module();
         let result = eval_all(&module, &snap);
-        assert_eq!(result.effective_status.get("1111111111"), Some(&Status::Done));
+        assert_eq!(effective_status(&result, "1111111111"), Some(Status::Done));
     }
 
     #[test]
@@ -610,7 +624,7 @@ mod tests {
         let snap = snapshot_from(&[("1111111111", &content)]);
         let module = default_module();
         let result = eval_all(&module, &snap);
-        assert_eq!(result.effective_status.get("1111111111"), Some(&Status::Wip));
+        assert_eq!(effective_status(&result, "1111111111"), Some(Status::Wip));
     }
 
     #[test]
@@ -632,6 +646,6 @@ mod tests {
         let snap = snapshot_from(&[("1111111111", &content)]);
         let module = default_module();
         let result = eval_all(&module, &snap);
-        assert_eq!(result.effective_status.get("1111111111"), Some(&Status::Done));
+        assert_eq!(effective_status(&result, "1111111111"), Some(Status::Done));
     }
 }

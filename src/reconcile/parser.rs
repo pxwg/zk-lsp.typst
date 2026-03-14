@@ -416,7 +416,8 @@ mod tests {
     #[test]
     fn valid_default_module() {
         let module = parse_module(DEFAULT_MODULE).expect("default module must parse");
-        assert_eq!(module.rules.len(), 6, "expected 6 rules in default module");
+        assert_eq!(module.rules.len(), 7, "expected 7 rules in default module");
+        assert!(module.rules.iter().any(|r| r.name == "materialized_fields"));
         assert!(module.rules.iter().any(|r| r.name == "child_status"));
         assert!(module.rules.iter().any(|r| r.name == "local_status"));
         assert!(module.rules.iter().any(|r| r.name == "targets_allow?"));

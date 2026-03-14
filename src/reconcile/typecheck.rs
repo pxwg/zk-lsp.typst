@@ -42,7 +42,7 @@ impl<'a> TypeEnv<'a> {
 }
 
 fn metadata_type_map(metadata_fields: &[MetadataFieldConfig]) -> HashMap<String, Type> {
-    metadata_fields
+    let mut types: HashMap<String, Type> = metadata_fields
         .iter()
         .map(|field| {
             let ty = match field.kind {
@@ -52,7 +52,12 @@ fn metadata_type_map(metadata_fields: &[MetadataFieldConfig]) -> HashMap<String,
             };
             (field.path.clone(), ty)
         })
-        .collect()
+        .collect();
+    types
+        .entry("checklist-status".to_string())
+        .or_insert(Type::Status);
+    types.entry("relation".to_string()).or_insert(Type::String);
+    types
 }
 
 fn is_builtin(name: &str) -> bool {
@@ -67,6 +72,7 @@ fn is_builtin(name: &str) -> bool {
             | "not"
             | "and"
             | "or"
+            | "list"
             | "done?"
             | "todo?"
             | "wip?"
@@ -192,6 +198,13 @@ fn builtin_return_type(
             }
             Ok(Type::Bool)
         }
+        "list" => {
+            let mut item_ty = Type::Any;
+            for arg in args {
+                item_ty = unify_types(item_ty, arg.clone());
+            }
+            Ok(Type::List(Box::new(item_ty)))
+        }
         "done?" | "todo?" | "wip?" | "none?" => {
             if args.len() != 1 {
                 return Err(TypeError::WrongArgCount {
@@ -213,9 +226,6 @@ fn builtin_return_type(
             ensure_type(&args[0], &Type::NoteRef)?;
             ensure_type(&args[1], &Type::String)?;
             match &arg_exprs[1] {
-                Expr::Lit(Value::String(field)) if field.as_ref() == "checklist-status" => {
-                    Ok(Type::Status)
-                }
                 Expr::Lit(Value::String(field)) => Ok(env
                     .metadata_kinds
                     .get(field.as_ref())
@@ -366,11 +376,7 @@ fn resolve_fn_return_type(
                 got: rule.params.len(),
             });
         }
-        return Ok(env
-            .return_types
-            .get(fn_name)
-            .cloned()
-            .unwrap_or(Type::Any));
+        return Ok(env.return_types.get(fn_name).cloned().unwrap_or(Type::Any));
     }
     Err(TypeError::UnknownFunction(fn_name.to_string()))
 }
@@ -402,14 +408,12 @@ fn bootstrap_expr_type(expr: &Expr, metadata_kinds: &HashMap<String, Type>) -> T
 fn bootstrap_call_type(name: &str, args: &[Expr], metadata_kinds: &HashMap<String, Type>) -> Type {
     match name {
         "empty?" | "all_done" | "all_done?" | "eq?" | "not" | "and" | "or" => Type::Bool,
+        "list" => Type::List(Box::new(Type::Any)),
         "done?" | "todo?" | "wip?" | "none?" => Type::Bool,
         "observe_checked" | "aggregate_status" => Type::Status,
         "targets" => Type::List(Box::new(Type::NoteRef)),
         "children" | "local_checkboxes" => Type::List(Box::new(Type::CheckboxRef)),
         "observe_meta" => match args.get(1) {
-            Some(Expr::Lit(Value::String(field))) if field.as_ref() == "checklist-status" => {
-                Type::Status
-            }
             Some(Expr::Lit(Value::String(field))) => metadata_kinds
                 .get(field.as_ref())
                 .cloned()
@@ -498,7 +502,9 @@ pub fn type_check_module_with_metadata(
         ensure_type(&inferred, &expected)?;
     }
 
-    Ok(TypeInfo { rule_return_types: return_types })
+    Ok(TypeInfo {
+        rule_return_types: return_types,
+    })
 }
 
 #[cfg(test)]

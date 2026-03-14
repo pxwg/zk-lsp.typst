@@ -64,7 +64,7 @@ pub async fn run_reconcile(config: &WikiConfig, dry_run: bool) -> Result<Reconci
             .collect();
 
         let after_checked = normalize_note_from_checked(content, &checked_by_line);
-        let new_content = apply_materialized_status(&_id, &after_checked, &reconcile_result)
+        let new_content = apply_materialized_metadata(&_id, &after_checked, &reconcile_result)
             .unwrap_or_else(|| after_checked.clone());
         if new_content != *content {
             files_changed += 1;
@@ -105,25 +105,41 @@ pub async fn collect_diagnostics(
     Ok(diagnostics)
 }
 
-fn apply_materialized_status(
+fn apply_materialized_metadata(
     note_id: &str,
     content: &str,
     reconcile_result: &materialize::ReconcileResult,
 ) -> Option<String> {
-    let status = reconcile_result
-        .materialized_meta
-        .get(&(note_id.to_string(), "checklist-status".to_string()))?;
-
-    let Value::Status(status) = status else {
-        return None;
-    };
-
     let mut patch = HashMap::new();
-    patch.insert(
-        "checklist-status".to_string(),
-        toml::Value::String(status.to_str().to_string()),
-    );
+    for ((materialized_note_id, field), value) in &reconcile_result.materialized_meta {
+        if materialized_note_id != note_id {
+            continue;
+        }
+        let Some(toml_value) = value_to_toml(value) else {
+            continue;
+        };
+        patch.insert(field.clone(), toml_value);
+    }
+    if patch.is_empty() {
+        return None;
+    }
     apply_metadata_patch(content, &patch).ok()
+}
+
+fn value_to_toml(value: &Value) -> Option<toml::Value> {
+    match value {
+        Value::Bool(value) => Some(toml::Value::Boolean(*value)),
+        Value::Status(status) => Some(toml::Value::String(status.to_str().to_string())),
+        Value::String(value) => Some(toml::Value::String(value.to_string())),
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                out.push(value_to_toml(item)?);
+            }
+            Some(toml::Value::Array(out))
+        }
+        Value::NoteRef(_) | Value::CheckboxRef(_) => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +333,7 @@ mod tests {
     use crate::reconcile::default_module::load_module;
     use crate::reconcile::eval::eval_all;
     use crate::reconcile::observe::WorkspaceSnapshot;
+    use crate::reconcile::parser::parse_module;
     use crate::reconcile::types::{DiagnosticKind, DiagnosticSeverity, Status, Value};
 
     fn make_toml_note(title: &str, id: &str, status: &str, body: &str) -> String {
@@ -736,7 +753,8 @@ mod tests {
         let module = load_test_module();
         let result = materialize(eval_all(&module, &snap));
 
-        let updated = apply_materialized_status("1111111111", &note, &result).expect("status edit");
+        let updated =
+            apply_materialized_metadata("1111111111", &note, &result).expect("status edit");
         assert!(updated.contains("checklist-status = \"done\""));
         assert_eq!(
             result
@@ -744,5 +762,44 @@ mod tests {
                 .get(&("1111111111".to_string(), "checklist-status".to_string())),
             Some(&Value::Status(Status::Done))
         );
+    }
+
+    #[test]
+    fn materialized_meta_can_write_multiple_fields() {
+        let src = r#"
+        (module
+          (define (materialized_fields n)
+            (list "checklist-status" "user.label"))
+          (define (effective_checked c)
+            (observe_checked c))
+          (define (effective_meta n field)
+            (if (eq? field "checklist-status")
+                done
+                (if (eq? field "user.label")
+                    "synced"
+                    (observe_meta n field)))))
+        "#;
+        let module = parse_module(src).expect("parse");
+        let note = "#import \"../include.typ\": *\n\
+             #let zk-metadata = toml(bytes(\n\
+             \x20 ```toml\n\
+             \x20 schema-version = 1\n\
+             \x20 title = \"A\"\n\
+             \x20 tags = []\n\
+             \x20 checklist-status = \"none\"\n\
+             \x20 user.label = \"stale\"\n\
+             \x20 generated = false\n\
+             \x20 ```.text,\n\
+             ))\n\
+             #show: zettel.with(metadata: zk-metadata)\n\
+             \n\
+             = A <1111111111>\n";
+        let snap = snapshot_from(&[("1111111111", note)]);
+        let result = materialize(eval_all(&module, &snap));
+        let updated =
+            apply_materialized_metadata("1111111111", note, &result).expect("metadata edit");
+
+        assert!(updated.contains("checklist-status = \"done\""));
+        assert!(updated.contains("user.label = \"synced\""));
     }
 }
