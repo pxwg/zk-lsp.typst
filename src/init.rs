@@ -8,11 +8,22 @@ use crate::note_ops;
 /// Minimal `include.typ` placed at the wiki root.
 ///
 /// Provides only what zk-lsp itself requires:
-///   - `zettel`    — render function called by every note
-///   - `zk_entry` — called by `link.typ` to include each note
+///   - `show-reference` — render links to unnumbered note headings
+///   - `zettel`         — render function called by every note
+///   - `zk_entry`       — called by `link.typ` to include each note
 ///
 /// Extend this file freely with your own imports and styling.
 const INCLUDE_TYP: &str = r#"// zk-lsp include — extend with your own imports and styling
+
+/// Render references to unnumbered note headings as clickable titles.
+#let show-reference(it) = {
+  if it.element != none and it.element.func() == heading {
+    let children = it.element.body
+    link(it.target)[[#children]]
+  } else {
+    it
+  }
+}
 
 /// Central metadata index, keyed by note ID.
 #let zk-metadata-db = toml("metadata.toml").notes
@@ -22,7 +33,10 @@ const INCLUDE_TYP: &str = r#"// zk-lsp include — extend with your own imports 
 
 /// Render a single zettel.
 /// `metadata` is the TOML-parsed record from metadata.toml.
-#let zettel(metadata: none, body) = body
+#let zettel(metadata: none, body) = {
+  show ref: it => show-reference(it)
+  body
+}
 
 /// Include one note into the compiled document.
 /// Called automatically by link.typ.

@@ -72,6 +72,13 @@ central metadata:
 Body text with @2607081903 references.
 ```
 
+When `index.typ` includes the target notes, the default `zettel` show rule uses
+`show-reference` from `include.typ` to render `@ID` references to unnumbered
+note headings as clickable `[Title]` links. If you replace the default wrapper,
+preserve that show rule or enable heading numbering; otherwise Typst cannot
+render a native reference to an unnumbered heading. Compiling one note alone
+still cannot resolve references to notes that were not included.
+
 `metadata.toml` owns all metadata fields for every note. Prefer
 `zk-lsp metadata` commands for ordinary changes instead of hand-editing this
 index:
