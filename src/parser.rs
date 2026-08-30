@@ -1,12 +1,14 @@
 /// Stateless parsing of Zettelkasten note headers and content.
 use once_cell::sync::Lazy;
 use regex::Regex;
+use tower_lsp::lsp_types::{Position, Range};
 
-pub(crate) static RE_ID_REF: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\d{10})").unwrap());
-pub(crate) static RE_ANGLE_ID: Lazy<Regex> = Lazy::new(|| Regex::new(r"<(\d{10})>").unwrap());
-pub(crate) static RE_TITLE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^=\s+.*<(\d{10})>").unwrap());
+pub(crate) static RE_ID_REF: Lazy<Regex> = Lazy::new(|| Regex::new(r"@([0-9]{10})").unwrap());
+pub(crate) static RE_ANGLE_ID: Lazy<Regex> = Lazy::new(|| Regex::new(r"<([0-9]{10})>").unwrap());
+pub(crate) static RE_TITLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^=\s+.*<([0-9]{10})>").unwrap());
 static RE_BINDING: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^\s*#let\s+zk-metadata\s*=\s*zk_metadata\("(\d{10})"\)\s*$"#).unwrap()
+    Regex::new(r#"^\s*#let\s+zk-metadata\s*=\s*zk_metadata\("([0-9]{10})"\)\s*$"#).unwrap()
 });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +69,19 @@ pub struct RefOccurrence {
     pub line: u32,
     pub start_char: u32,
     pub end_char: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteRefAtPosition {
+    pub id: String,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VisibleSegment {
+    line: u32,
+    start: usize,
+    end: usize,
 }
 
 /// Scan `content` for a canonical central metadata binding:
@@ -188,14 +203,16 @@ pub fn parse_checklist_items(content: &str) -> Vec<ChecklistItem> {
         let text = body.to_string();
         let targets: Vec<RefTarget> = RE_ID_REF
             .captures_iter(body)
-            .map(|c| {
-                let full = c.get(0).unwrap();
-                let id = c.get(1).unwrap().as_str().to_string();
-                RefTarget {
-                    target_id: id,
+            .filter_map(|captures| {
+                let full = captures.get(0)?;
+                if is_followed_by_ascii_digit(body, full.end()) {
+                    return None;
+                }
+                Some(RefTarget {
+                    target_id: captures.get(1)?.as_str().to_string(),
                     byte_start: (prefix_len + full.start()) as u32,
                     byte_end: (prefix_len + full.end()) as u32,
-                }
+                })
             })
             .collect();
         let kind = if targets.is_empty() {
@@ -256,81 +273,63 @@ pub fn byte_to_utf16(s: &str, byte_offset: usize) -> u32 {
     s[..byte_offset].chars().map(|c| c.len_utf16() as u32).sum()
 }
 
-/// Find all @ID occurrences in content (10-digit IDs).
-/// `start_char` / `end_char` are **byte** offsets within the line (not UTF-16).
-/// Convert with `byte_to_utf16` before using as LSP character positions.
-pub fn find_all_refs(content: &str) -> Vec<RefOccurrence> {
-    let mut refs = Vec::new();
-    for (line_num, line) in content.lines().enumerate() {
-        for cap in RE_ID_REF.captures_iter(line) {
-            let m = cap.get(0).unwrap();
-            let id_m = cap.get(1).unwrap();
-            refs.push(RefOccurrence {
-                id: id_m.as_str().to_string(),
-                line: line_num as u32,
-                start_char: m.start() as u32,
-                end_char: m.end() as u32,
-            });
+fn utf16_to_byte(s: &str, character: u32) -> Option<usize> {
+    if character == 0 {
+        return Some(0);
+    }
+
+    let mut utf16_units = 0;
+    for (byte_idx, ch) in s.char_indices() {
+        utf16_units += ch.len_utf16() as u32;
+        if utf16_units == character {
+            return Some(byte_idx + ch.len_utf8());
+        }
+        if utf16_units > character {
+            return None;
         }
     }
-    refs
+
+    (utf16_units == character).then_some(s.len())
 }
 
-/// Find all @ID occurrences in content, skipping:
-/// - Block comments (`/* ... */`, including multi-line)
-/// - Fenced code blocks (``` ... ```)
-pub fn find_all_refs_filtered(content: &str) -> Vec<RefOccurrence> {
-    let mut refs = Vec::new();
+fn is_followed_by_ascii_digit(text: &str, byte_offset: usize) -> bool {
+    text.as_bytes()
+        .get(byte_offset)
+        .is_some_and(|byte| byte.is_ascii_digit())
+}
 
+fn push_refs_from_segment(
+    refs: &mut Vec<RefOccurrence>,
+    line: u32,
+    segment: &str,
+    segment_start: usize,
+) {
+    for captures in RE_ID_REF.captures_iter(segment) {
+        let Some(full) = captures.get(0) else {
+            continue;
+        };
+        if is_followed_by_ascii_digit(segment, full.end()) {
+            continue;
+        }
+        let Some(id) = captures.get(1) else {
+            continue;
+        };
+        refs.push(RefOccurrence {
+            id: id.as_str().to_string(),
+            line,
+            start_char: (segment_start + full.start()) as u32,
+            end_char: (segment_start + full.end()) as u32,
+        });
+    }
+}
+
+fn visible_segments(content: &str) -> Vec<VisibleSegment> {
+    let mut segments = Vec::new();
     let mut in_block_comment = false;
     let mut in_fence = false;
 
-    for (line_num, line) in content.lines().enumerate() {
-        // Handle block comment continuation
-        if in_block_comment {
-            if let Some(end_offset) = line.find("*/") {
-                in_block_comment = false;
-                // Process visible content after end of block comment
-                // by falling through with adjusted pos below
-                let after_offset = end_offset + 2;
-                let mut visible_segments: Vec<(usize, usize)> = Vec::new();
-                let mut pos = after_offset;
-                loop {
-                    let remaining = &line[pos..];
-                    if let Some(bc_start) = remaining.find("/*") {
-                        visible_segments.push((pos, pos + bc_start));
-                        let bc_abs = pos + bc_start;
-                        if let Some(end_off) = line[bc_abs + 2..].find("*/") {
-                            pos = bc_abs + 2 + end_off + 2;
-                        } else {
-                            in_block_comment = true;
-                            break;
-                        }
-                    } else {
-                        visible_segments.push((pos, line.len()));
-                        break;
-                    }
-                }
-                for (seg_start, seg_end) in visible_segments {
-                    let segment = &line[seg_start..seg_end];
-                    for cap in RE_ID_REF.captures_iter(segment) {
-                        let m = cap.get(0).unwrap();
-                        let id_m = cap.get(1).unwrap();
-                        refs.push(RefOccurrence {
-                            id: id_m.as_str().to_string(),
-                            line: line_num as u32,
-                            start_char: (seg_start + m.start()) as u32,
-                            end_char: (seg_start + m.end()) as u32,
-                        });
-                    }
-                }
-            }
-            // Whether we found */ or not, move to next line
-            continue;
-        }
-
-        // Fence toggle (only when not in block comment)
-        if line.trim_start().starts_with("```") {
+    for (line_idx, line) in content.lines().enumerate() {
+        if !in_block_comment && line.trim_start().starts_with("```") {
             in_fence = !in_fence;
             continue;
         }
@@ -338,42 +337,155 @@ pub fn find_all_refs_filtered(content: &str) -> Vec<RefOccurrence> {
             continue;
         }
 
-        // Normal line: scan for block comment boundaries and collect visible segments
-        let mut visible_segments: Vec<(usize, usize)> = Vec::new();
         let mut pos = 0;
-        loop {
-            let remaining = &line[pos..];
-            if let Some(bc_start) = remaining.find("/*") {
-                visible_segments.push((pos, pos + bc_start));
-                let bc_abs = pos + bc_start;
-                if let Some(end_off) = line[bc_abs + 2..].find("*/") {
-                    pos = bc_abs + 2 + end_off + 2;
-                } else {
-                    in_block_comment = true;
+        while pos < line.len() {
+            if in_block_comment {
+                let Some(end_offset) = line[pos..].find("*/") else {
                     break;
-                }
-            } else {
-                visible_segments.push((pos, line.len()));
-                break;
+                };
+                pos += end_offset + 2;
+                in_block_comment = false;
+                continue;
             }
-        }
 
-        for (seg_start, seg_end) in visible_segments {
-            let segment = &line[seg_start..seg_end];
-            for cap in RE_ID_REF.captures_iter(segment) {
-                let m = cap.get(0).unwrap();
-                let id_m = cap.get(1).unwrap();
-                refs.push(RefOccurrence {
-                    id: id_m.as_str().to_string(),
-                    line: line_num as u32,
-                    start_char: (seg_start + m.start()) as u32,
-                    end_char: (seg_start + m.end()) as u32,
+            if let Some(start_offset) = line[pos..].find("/*") {
+                let comment_start = pos + start_offset;
+                if pos < comment_start {
+                    segments.push(VisibleSegment {
+                        line: line_idx as u32,
+                        start: pos,
+                        end: comment_start,
+                    });
+                }
+                pos = comment_start + 2;
+                in_block_comment = true;
+            } else {
+                segments.push(VisibleSegment {
+                    line: line_idx as u32,
+                    start: pos,
+                    end: line.len(),
                 });
+                break;
             }
         }
     }
 
+    segments
+}
+
+fn range_contains_position(range: Range, position: Position) -> bool {
+    position.line == range.start.line
+        && position.character >= range.start.character
+        && position.character <= range.end.character
+}
+
+fn line_byte_range_to_lsp(line_idx: u32, line: &str, start: usize, end: usize) -> Range {
+    Range {
+        start: Position {
+            line: line_idx,
+            character: byte_to_utf16(line, start),
+        },
+        end: Position {
+            line: line_idx,
+            character: byte_to_utf16(line, end),
+        },
+    }
+}
+
+/// Find all exact `@ID` occurrences in content, where `ID` is ten ASCII digits.
+/// `start_char` / `end_char` are **byte** offsets within the line (not UTF-16).
+/// Convert with `byte_to_utf16` before using as LSP character positions.
+pub fn find_all_refs(content: &str) -> Vec<RefOccurrence> {
+    let mut refs = Vec::new();
+    for (line_num, line) in content.lines().enumerate() {
+        push_refs_from_segment(&mut refs, line_num as u32, line, 0);
+    }
     refs
+}
+
+/// Find all exact `@ID` occurrences in visible content, skipping block comments
+/// and fenced code blocks.
+pub fn find_all_refs_filtered(content: &str) -> Vec<RefOccurrence> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut refs = Vec::new();
+
+    for visible in visible_segments(content) {
+        let Some(line) = lines.get(visible.line as usize) else {
+            continue;
+        };
+        push_refs_from_segment(
+            &mut refs,
+            visible.line,
+            &line[visible.start..visible.end],
+            visible.start,
+        );
+    }
+
+    refs
+}
+
+/// Return the complete visible `@ID` token at an LSP position.
+pub fn note_ref_at_position(content: &str, position: Position) -> Option<NoteRefAtPosition> {
+    let lines: Vec<&str> = content.lines().collect();
+    find_all_refs_filtered(content)
+        .into_iter()
+        .filter(|occurrence| occurrence.line == position.line)
+        .find_map(|occurrence| {
+            let line = lines.get(occurrence.line as usize)?;
+            let range = line_byte_range_to_lsp(
+                occurrence.line,
+                line,
+                occurrence.start_char as usize,
+                occurrence.end_char as usize,
+            );
+            range_contains_position(range, position).then_some(NoteRefAtPosition {
+                id: occurrence.id,
+                range,
+            })
+        })
+}
+
+/// Return the zero-width insertion range after a visible bare `@` trigger.
+pub fn note_ref_completion_range(content: &str, position: Position) -> Option<Range> {
+    let line = content.lines().nth(position.line as usize)?;
+    let cursor_byte = utf16_to_byte(line, position.character)?;
+    let (at_byte, previous) = line[..cursor_byte].char_indices().next_back()?;
+    if previous != '@' {
+        return None;
+    }
+
+    let visible = visible_segments(content).into_iter().any(|segment| {
+        segment.line == position.line && at_byte >= segment.start && at_byte < segment.end
+    });
+    visible.then_some(Range {
+        start: position,
+        end: position,
+    })
+}
+
+/// Return the current note's identity when the position is on its canonical
+/// metadata binding or title-heading ID.
+pub fn note_identity_at_position(content: &str, position: Position) -> Option<String> {
+    let header = parse_header(content)?;
+    let binding = find_metadata_binding(content)?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    let (line_idx, token, use_last_match) = if position.line == header.title_line_idx as u32 {
+        (header.title_line_idx, format!("<{}>", header.id), true)
+    } else if position.line == binding.line_idx as u32 {
+        (binding.line_idx, format!("\"{}\"", header.id), false)
+    } else {
+        return None;
+    };
+
+    let line = *lines.get(line_idx)?;
+    let start = if use_last_match {
+        line.rfind(&token)?
+    } else {
+        line.find(&token)?
+    };
+    let range = line_byte_range_to_lsp(position.line, line, start, start + token.len());
+    range_contains_position(range, position).then_some(header.id)
 }
 
 /// Find all link target IDs in content, combining both `@ID` and `<ID>` forms,
@@ -471,7 +583,7 @@ pub struct Heading {
 #[allow(dead_code)]
 pub fn parse_headings(content: &str) -> Vec<Heading> {
     static RE_HEADING: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(=+)\s+(.+)").unwrap());
-    static RE_ID_SUFFIX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+<\d{10}>$").unwrap());
+    static RE_ID_SUFFIX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+<[0-9]{10}>$").unwrap());
 
     let mut headings = Vec::new();
     let mut in_fence = false;
@@ -591,6 +703,89 @@ mod tests {
         assert!(ids.contains(&"2602082106"));
         assert!(!ids.contains(&"9999999999"));
         assert!(!ids.contains(&"8888888888"));
+    }
+
+    #[test]
+    fn refs_require_exactly_ten_ascii_digits() {
+        assert!(find_all_refs("@12345678901").is_empty());
+        assert!(find_all_refs("@１２３４５６７８９０").is_empty());
+        assert_eq!(find_all_refs("@1234567890x")[0].id, "1234567890");
+        assert!(parse_checklist_items("- [ ] @12345678901\n")[0]
+            .kind
+            .eq(&ChecklistItemKind::Local));
+    }
+
+    #[test]
+    fn note_ref_at_position_uses_utf16_ranges() {
+        let prefix = "中文😀 ";
+        let content = format!("{prefix}@2602082037\n");
+        let start = prefix.encode_utf16().count() as u32;
+        let note_ref = note_ref_at_position(
+            &content,
+            Position {
+                line: 0,
+                character: start + 3,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(note_ref.id, "2602082037");
+        assert_eq!(note_ref.range.start.character, start);
+        assert_eq!(note_ref.range.end.character, start + 11);
+    }
+
+    #[test]
+    fn note_ref_at_position_rejects_hidden_and_overlong_refs() {
+        let content = concat!(
+            "/* @1111111111 */\n",
+            "```\n",
+            "@2222222222\n",
+            "```\n",
+            "@33333333333\n",
+        );
+        for line in [0, 2, 4] {
+            assert!(note_ref_at_position(content, Position { line, character: 3 },).is_none());
+        }
+    }
+
+    #[test]
+    fn note_ref_completion_requires_visible_at_immediately_before_cursor() {
+        let prefix = "中文😀 ";
+        let content = format!("{prefix}@\n/* @ */\n```\n@\n```\n");
+        let character = prefix.encode_utf16().count() as u32 + 1;
+        let range = note_ref_completion_range(&content, Position { line: 0, character }).unwrap();
+        assert_eq!(range.start.character, character);
+        assert_eq!(range.start, range.end);
+        assert!(note_ref_completion_range(
+            &content,
+            Position {
+                line: 1,
+                character: 4,
+            },
+        )
+        .is_none());
+        assert!(note_ref_completion_range(
+            &content,
+            Position {
+                line: 3,
+                character: 1,
+            },
+        )
+        .is_none());
+        assert!(note_ref_completion_range("see @1", Position::new(0, 6)).is_none());
+    }
+
+    #[test]
+    fn note_identity_position_is_limited_to_binding_and_title() {
+        assert_eq!(
+            note_identity_at_position(CENTRAL_NOTE, Position::new(1, 40)).as_deref(),
+            Some("2603110000")
+        );
+        assert_eq!(
+            note_identity_at_position(CENTRAL_NOTE, Position::new(4, 17)).as_deref(),
+            Some("2603110000")
+        );
+        assert!(note_identity_at_position(CENTRAL_NOTE, Position::new(6, 6)).is_none());
     }
 
     #[test]

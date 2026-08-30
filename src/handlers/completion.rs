@@ -78,6 +78,45 @@ pub fn get_metadata_completions(
     Vec::new()
 }
 
+pub fn get_note_ref_completions(
+    content: &str,
+    position: Position,
+    index: &Arc<NoteIndex>,
+) -> Option<CompletionList> {
+    let edit_range = parser::note_ref_completion_range(content, position)?;
+    let mut notes: Vec<_> = index
+        .notes
+        .iter()
+        .map(|entry| entry.value().clone())
+        .collect();
+    notes.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let items = notes
+        .into_iter()
+        .map(|info| CompletionItem {
+            label: info.id.clone(),
+            label_details: Some(CompletionItemLabelDetails {
+                detail: None,
+                description: Some(info.title.clone()),
+            }),
+            kind: Some(CompletionItemKind::REFERENCE),
+            detail: Some(info.title),
+            filter_text: Some(info.id.clone()),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range: edit_range,
+                new_text: info.id,
+            })),
+            ..Default::default()
+        })
+        .collect();
+
+    Some(CompletionList {
+        is_incomplete: false,
+        items,
+    })
+}
+
 fn enum_completion(value: &str) -> CompletionItem {
     CompletionItem {
         label: value.to_string(),
@@ -146,28 +185,37 @@ mod tests {
     }
 
     fn index_with_note(id: &str, title: &str) -> Arc<NoteIndex> {
+        let index = empty_index();
+        insert_note(&index, id, title, false, false, &[]);
+        index
+    }
+
+    fn insert_note(
+        index: &Arc<NoteIndex>,
+        id: &str,
+        title: &str,
+        archived: bool,
+        legacy: bool,
+        aliases: &[&str],
+    ) {
         use crate::index::NoteInfo;
-        let idx = NoteIndex::new(Arc::new(tokio::sync::RwLock::new(WikiConfig::from_root(
-            PathBuf::from("/tmp"),
-        ))));
-        idx.notes.insert(
+        index.notes.insert(
             id.to_string(),
             NoteInfo {
                 id: id.to_string(),
                 title: title.to_string(),
-                archived: false,
-                legacy: false,
+                archived,
+                legacy,
                 alt_id: None,
                 evo_id: None,
                 relation_target: vec![],
-                aliases: vec![],
+                aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
                 keywords: vec![],
                 abstract_text: None,
                 checklist_status: None,
                 path: PathBuf::from(format!("/tmp/{id}.typ")),
             },
         );
-        Arc::new(idx)
     }
 
     const METADATA_CONTENT: &str = concat!(
@@ -250,5 +298,73 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(!labels.contains(&"user.project"));
         assert!(labels.contains(&"user.reviewed"));
+    }
+
+    #[test]
+    fn note_ref_completion_matches_tinymist_protocol_shape() {
+        let index = empty_index();
+        insert_note(
+            &index,
+            "2601010002",
+            "Host Note",
+            false,
+            false,
+            &["host-alias"],
+        );
+        insert_note(
+            &index,
+            "2601010001",
+            "Target Note Title",
+            true,
+            false,
+            &["target-alias"],
+        );
+        insert_note(&index, "2601010003", "Legacy Note", false, true, &[]);
+        let content = "中文😀 See @";
+        let position = Position::new(0, content.encode_utf16().count() as u32);
+        let list = get_note_ref_completions(content, position, &index).unwrap();
+
+        assert!(!list.is_incomplete);
+        assert_eq!(
+            list.items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2601010001", "2601010002", "2601010003"]
+        );
+        assert_eq!(
+            serde_json::to_value(&list.items[0]).unwrap(),
+            serde_json::json!({
+                "label": "2601010001",
+                "labelDetails": { "description": "Target Note Title" },
+                "kind": 18,
+                "detail": "Target Note Title",
+                "filterText": "2601010001",
+                "insertTextFormat": 2,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": 0, "character": position.character },
+                        "end": { "line": 0, "character": position.character }
+                    },
+                    "newText": "2601010001"
+                }
+            })
+        );
+        assert_eq!(list.items[1].filter_text.as_deref(), Some("2601010002"));
+        assert_ne!(list.items[0].filter_text.as_deref(), Some("target-alias"));
+        let raw_response =
+            serde_json::to_value(CompletionResponse::List(list)).expect("serializable response");
+        assert!(raw_response.is_object());
+        assert_eq!(raw_response["isIncomplete"], false);
+        assert_eq!(raw_response["items"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn note_ref_completion_only_runs_immediately_after_visible_at() {
+        let index = index_with_note("2601010001", "Target");
+        assert!(get_note_ref_completions("See @", Position::new(0, 5), &index).is_some());
+        assert!(get_note_ref_completions("See @1", Position::new(0, 6), &index).is_none());
+        assert!(get_note_ref_completions("/* @ */", Position::new(0, 4), &index).is_none());
+        assert!(get_note_ref_completions("See text", Position::new(0, 8), &index).is_none());
     }
 }

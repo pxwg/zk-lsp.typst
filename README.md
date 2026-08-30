@@ -117,12 +117,27 @@ zk-lsp metadata set ID relation=archived
 
 editor navigation
     |
+    +--> bare @ in note body    ----completion---->  all note IDs
+    |
+    +--> body @ID               ----definition---->  target note title
+    |                           ----hover--------->  target Typst source
+    |
     +--> note title/binding ID  ----definition---->  [notes."ID"]
     |
     +--> metadata record key    ----definition---->  note title
     |
     +--> references include body @ID, record key, and relation-target IDs
 ```
+
+In scoped `note/*.typ` buffers, zk-lsp owns editing semantics for ZK links of
+exactly `@` plus ten ASCII digits. Bare-`@` completion is ID-only and includes
+the current, active, legacy, and archived notes. Definition resolves to the
+real target note, while hover returns that note's current Typst source in a
+pure Markdown ```` ```typ ```` block.
+
+Ordinary Typst symbols, non-ZK labels, packages, and BibTeX citations remain
+the Typst language server's responsibility. Full publication builds still use
+Typst's native references through `index.typ` and generated `link.typ`.
 
 ## Neovim Integration
 
@@ -365,13 +380,14 @@ See [docs/reconcile-dsl.md](docs/reconcile-dsl.md) for the DSL reference and exa
 
 | Capability | Trigger |
 |---|---|
+| Note-ID completion | Bare `@` in scoped note bodies |
 | Inlay hints | Every `@ID` reference |
 | Diagnostics | `didOpen`, `didSave`, `didChangeWatchedFiles` |
 | Code actions | On diagnostic ranges |
-| References | `textDocument/references` |
+| References | Body `@ID`, note identity IDs, and metadata IDs |
 | Workspace symbols | Symbol search by query string |
-| Hover | `relation-target` IDs |
-| Go-to-definition | `relation-target` IDs |
+| Hover | Body `@ID` source preview and metadata `relation-target` IDs |
+| Go-to-definition | Body `@ID`, note identity IDs, and metadata `relation-target` IDs |
 
 ### LSP commands (`executeCommand`)
 

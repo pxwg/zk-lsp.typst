@@ -96,13 +96,8 @@ impl ZkLspServer {
     }
 
     async fn read_document(&self, uri: &Url) -> Option<String> {
-        if let Some(content) = self.open_documents.read().await.get(uri).cloned() {
-            return Some(content);
-        }
-
-        uri.to_file_path()
-            .ok()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+        let open_content = self.open_documents.read().await.get(uri).cloned();
+        read_document_from_sources(open_content, uri)
     }
 
     async fn read_metadata_document(&self, config: &WikiConfig) -> Option<(Url, String)> {
@@ -139,7 +134,7 @@ impl LanguageServer for ZkLspServer {
                 references_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec!["\"".into(), "=".into(), "[".into()]),
+                    trigger_characters: Some(completion_trigger_characters()),
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
@@ -395,21 +390,30 @@ impl LanguageServer for ZkLspServer {
         let config = self.current_config().await;
         let path = uri.to_file_path().unwrap_or_default();
 
-        let location = if is_metadata_path(&config, &path) {
-            definition::get_metadata_definition(&content, position, &self.index)
-        } else {
-            self.read_metadata_document(&config).await.and_then(
-                |(metadata_uri, metadata_content)| {
-                    definition::get_note_definition(
-                        &content,
-                        position,
-                        &metadata_uri,
-                        &metadata_content,
-                    )
-                },
-            )
-        };
+        if is_metadata_path(&config, &path) {
+            return Ok(
+                definition::get_metadata_definition(&content, position, &self.index)
+                    .map(GotoDefinitionResponse::Scalar),
+            );
+        }
+        if !is_scoped_note_path(&config, &path) {
+            return Ok(None);
+        }
 
+        if let Some(link) = definition::get_note_ref_definition(&content, position, &self.index) {
+            return Ok(Some(GotoDefinitionResponse::Link(vec![link])));
+        }
+
+        let location = self.read_metadata_document(&config).await.and_then(
+            |(metadata_uri, metadata_content)| {
+                definition::get_note_definition(
+                    &content,
+                    position,
+                    &metadata_uri,
+                    &metadata_content,
+                )
+            },
+        );
         Ok(location.map(GotoDefinitionResponse::Scalar))
     }
 
@@ -483,20 +487,26 @@ impl LanguageServer for ZkLspServer {
         let content = self.read_document(uri).await.unwrap_or_default();
         let config = self.current_config().await;
         let path = uri.to_file_path().unwrap_or_default();
-        if !is_metadata_path(&config, &path) {
-            return Ok(None);
+        if is_metadata_path(&config, &path) {
+            let items = completion::get_metadata_completions(
+                &content,
+                position,
+                &self.index,
+                &config.zk_config.metadata.fields,
+            );
+            return Ok(if items.is_empty() {
+                None
+            } else {
+                Some(CompletionResponse::Array(items))
+            });
         }
-        let items = completion::get_metadata_completions(
-            &content,
-            position,
-            &self.index,
-            &config.zk_config.metadata.fields,
-        );
-        Ok(if items.is_empty() {
-            None
-        } else {
-            Some(CompletionResponse::Array(items))
-        })
+        if is_scoped_note_path(&config, &path) {
+            return Ok(
+                completion::get_note_ref_completions(&content, position, &self.index)
+                    .map(CompletionResponse::List),
+            );
+        }
+        Ok(None)
     }
 
     // -----------------------------------------------------------------------
@@ -513,10 +523,20 @@ impl LanguageServer for ZkLspServer {
         let content = self.read_document(uri).await.unwrap_or_default();
         let config = self.current_config().await;
         let path = uri.to_file_path().unwrap_or_default();
-        if !is_metadata_path(&config, &path) {
+        if is_metadata_path(&config, &path) {
+            return Ok(hover::get_metadata_hover(&content, position, &self.index));
+        }
+        if !is_scoped_note_path(&config, &path) {
             return Ok(None);
         }
-        Ok(hover::get_metadata_hover(&content, position, &self.index))
+
+        let Some(target) = hover::resolve_note_ref_hover(&content, position, &self.index) else {
+            return Ok(None);
+        };
+        let Some(target_content) = self.read_document(&target.uri).await else {
+            return Ok(None);
+        };
+        Ok(Some(hover::build_note_ref_hover(&target, &target_content)))
     }
 
     // -----------------------------------------------------------------------
@@ -668,6 +688,18 @@ impl ZkLspServer {
     }
 }
 
+fn completion_trigger_characters() -> Vec<String> {
+    vec!["\"".into(), "=".into(), "[".into(), "@".into()]
+}
+
+fn read_document_from_sources(open_content: Option<String>, uri: &Url) -> Option<String> {
+    open_content.or_else(|| {
+        uri.to_file_path()
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+    })
+}
+
 fn is_scoped_note_path(config: &WikiConfig, path: &std::path::Path) -> bool {
     let note_dir = absolute_path(&config.note_dir);
     let path = absolute_path(path);
@@ -812,14 +844,19 @@ fn position_to_byte_offset(content: &str, position: Position) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_content_changes, is_scoped_note_path, metadata_document_is_dirty,
-        position_to_byte_offset,
+        apply_content_changes, completion_trigger_characters, is_scoped_note_path,
+        metadata_document_is_dirty, position_to_byte_offset, read_document_from_sources,
     };
     use crate::config::WikiConfig;
     use crate::parser;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent, Url};
+
+    #[test]
+    fn completion_triggers_preserve_metadata_characters_and_add_at() {
+        assert_eq!(completion_trigger_characters(), vec!["\"", "=", "[", "@"]);
+    }
 
     #[test]
     fn scoped_note_path_only_accepts_typst_files_under_note_dir() {
@@ -859,6 +896,28 @@ mod tests {
         assert!(metadata_document_is_dirty(&open, &config));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn note_hover_reads_unsaved_open_target_before_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("2603110001.typ");
+        std::fs::write(&path, "disk content\n").unwrap();
+        let uri = Url::from_file_path(path).unwrap();
+        let mut open = HashMap::new();
+        open.insert(uri.clone(), "unsaved content\n".to_string());
+
+        assert_eq!(
+            read_document_from_sources(open.get(&uri).cloned(), &uri).as_deref(),
+            Some("unsaved content\n")
+        );
+        open.clear();
+        assert_eq!(
+            read_document_from_sources(open.get(&uri).cloned(), &uri).as_deref(),
+            Some("disk content\n")
+        );
+        let missing = Url::from_file_path(dir.path().join("missing.typ")).unwrap();
+        assert!(read_document_from_sources(None, &missing).is_none());
     }
 
     #[test]

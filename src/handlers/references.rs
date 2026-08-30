@@ -86,36 +86,108 @@ fn id_at_position(content: &str, position: Position) -> Option<String> {
     {
         return Some(id_pos.target_id);
     }
-    let line = content.lines().nth(position.line as usize)?;
-    find_id_at_col(line, position.character as usize)
+    if let Some(note_ref) = parser::note_ref_at_position(content, position) {
+        return Some(note_ref.id);
+    }
+    parser::note_identity_at_position(content, position)
 }
 
-fn find_id_at_col(line: &str, col: usize) -> Option<String> {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        let (start, end_delim) = match bytes[i] {
-            b'@' => (i + 1, None),
-            b'<' => (i + 1, Some(b'>')),
-            b'"' => (i + 1, Some(b'"')),
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        let end = start + 10;
-        if end <= len
-            && bytes[start..end].iter().all(|b| b.is_ascii_digit())
-            && end_delim
-                .map(|d| end < len && bytes[end] == d)
-                .unwrap_or(true)
-            && col >= i
-            && col <= end
-        {
-            return Some(line[start..end].to_string());
-        }
-        i += 1;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::WikiConfig;
+    use crate::index::BacklinkLocation;
+    use std::path::PathBuf;
+
+    fn make_index() -> Arc<NoteIndex> {
+        Arc::new(NoteIndex::new(Arc::new(tokio::sync::RwLock::new(
+            WikiConfig::from_root(PathBuf::from("/tmp/wiki")),
+        ))))
     }
-    None
+
+    #[test]
+    fn body_references_reuse_utf16_note_ref_lookup() {
+        let index = make_index();
+        index
+            .backlinks
+            .entry("2603110001".to_string())
+            .or_default()
+            .push(BacklinkLocation {
+                file: PathBuf::from("/tmp/wiki/note/2603110002.typ"),
+                line: 3,
+                start_char: 4,
+                end_char: 15,
+            });
+        let uri = Url::parse("file:///tmp/wiki/note/2603110000.typ").unwrap();
+        let metadata_uri = Url::parse("file:///tmp/wiki/metadata.toml").unwrap();
+        let locations = find_references(
+            &index,
+            &uri,
+            "中文😀 @2603110001",
+            Position::new(0, 8),
+            &metadata_uri,
+            "format-version = 1\n",
+            false,
+        );
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].range.start, Position::new(3, 4));
+    }
+
+    #[test]
+    fn note_identity_and_metadata_reference_lookup_still_work() {
+        let index = make_index();
+        let uri = Url::parse("file:///tmp/wiki/note/2603110000.typ").unwrap();
+        let metadata_uri = Url::parse("file:///tmp/wiki/metadata.toml").unwrap();
+        let note = concat!(
+            "#let zk-metadata = zk_metadata(\"2603110000\")\n",
+            "= Host <2603110000>\n",
+        );
+        let metadata = concat!(
+            "format-version = 1\n\n",
+            "[notes.\"2603110000\"]\n",
+            "relation-target = [\"2603110001\"]\n",
+        );
+
+        let from_title = find_references(
+            &index,
+            &uri,
+            note,
+            Position::new(1, 10),
+            &metadata_uri,
+            metadata,
+            false,
+        );
+        assert_eq!(from_title.len(), 1);
+        assert_eq!(from_title[0].range.start, Position::new(2, 8));
+
+        let from_metadata = find_references(
+            &index,
+            &metadata_uri,
+            metadata,
+            Position::new(3, 22),
+            &metadata_uri,
+            metadata,
+            false,
+        );
+        assert_eq!(from_metadata.len(), 1);
+        assert_eq!(from_metadata[0].range.start.line, 3);
+    }
+
+    #[test]
+    fn body_references_reject_overlong_note_ids() {
+        let index = make_index();
+        let uri = Url::parse("file:///tmp/wiki/note/2603110000.typ").unwrap();
+        let metadata_uri = Url::parse("file:///tmp/wiki/metadata.toml").unwrap();
+        assert!(find_references(
+            &index,
+            &uri,
+            "@26031100011",
+            Position::new(0, 3),
+            &metadata_uri,
+            "format-version = 1\n",
+            false,
+        )
+        .is_empty());
+    }
 }

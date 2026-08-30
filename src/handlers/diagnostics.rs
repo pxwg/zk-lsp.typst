@@ -973,6 +973,21 @@ mod tests {
     }
 
     #[test]
+    fn archived_diagnostic_keeps_utf16_reference_range() {
+        let index = make_index();
+        insert_note(&index, "1111111111");
+        index.notes.get_mut("1111111111").unwrap().archived = true;
+
+        let diags = get_diagnostics("中文😀 @1111111111\n", &index, "/wiki/note/9999999999.typ");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(
+            diags[0].range,
+            Range::new(Position::new(0, 5), Position::new(0, 16))
+        );
+    }
+
+    #[test]
     fn test_missing_metadata_block_produces_error() {
         let index = make_index();
         let content = concat!(

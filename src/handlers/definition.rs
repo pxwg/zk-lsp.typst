@@ -12,7 +12,7 @@ pub fn get_note_definition(
     metadata_content: &str,
 ) -> Option<Location> {
     let header = parser::parse_header(content)?;
-    let id = note_id_at_position(content, position)?;
+    let id = parser::note_identity_at_position(content, position)?;
     if id != header.id {
         return None;
     }
@@ -20,6 +20,39 @@ pub fn get_note_definition(
     Some(Location {
         uri: metadata_uri.clone(),
         range: lsp_range(range),
+    })
+}
+
+pub fn get_note_ref_definition(
+    content: &str,
+    position: Position,
+    index: &Arc<NoteIndex>,
+) -> Option<LocationLink> {
+    get_note_ref_definition_with_loader(content, position, index, |path| {
+        std::fs::read_to_string(path).ok()
+    })
+}
+
+fn get_note_ref_definition_with_loader<F>(
+    content: &str,
+    position: Position,
+    index: &Arc<NoteIndex>,
+    load_note: F,
+) -> Option<LocationLink>
+where
+    F: Fn(&std::path::Path) -> Option<String>,
+{
+    let note_ref = parser::note_ref_at_position(content, position)?;
+    let info = index.get(&note_ref.id)?;
+    let target_content = load_note(&info.path)?;
+    let (target_range, target_selection_range) =
+        title_heading_ranges(&target_content, &note_ref.id)?;
+
+    Some(LocationLink {
+        origin_selection_range: Some(note_ref.range),
+        target_uri: Url::from_file_path(&info.path).ok()?,
+        target_range,
+        target_selection_range,
     })
 }
 
@@ -64,34 +97,37 @@ where
     })
 }
 
-fn note_id_at_position(content: &str, position: Position) -> Option<String> {
-    let line = content.lines().nth(position.line as usize)?;
-    find_id_at_col(line, position.character as usize)
-}
-
-fn find_id_at_col(line: &str, col: usize) -> Option<String> {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        let start = if bytes[i] == b'<' || bytes[i] == b'"' {
-            i + 1
-        } else {
-            i += 1;
-            continue;
-        };
-        let end = start + 10;
-        if end < len
-            && (bytes[end] == b'>' || bytes[end] == b'"')
-            && bytes[start..end].iter().all(|b| b.is_ascii_digit())
-            && col >= i
-            && col <= end
-        {
-            return Some(line[start..end].to_string());
-        }
-        i += 1;
+fn title_heading_ranges(content: &str, expected_id: &str) -> Option<(Range, Range)> {
+    let header = parser::parse_header(content)?;
+    if header.id != expected_id {
+        return None;
     }
-    None
+
+    let line = content.lines().nth(header.title_line_idx)?;
+    let label = format!("<{expected_id}>");
+    let label_start = line.rfind(&label)?;
+    let line_idx = header.title_line_idx as u32;
+    let target_range = Range {
+        start: Position {
+            line: line_idx,
+            character: 0,
+        },
+        end: Position {
+            line: line_idx,
+            character: line.encode_utf16().count() as u32,
+        },
+    };
+    let target_selection_range = Range {
+        start: Position {
+            line: line_idx,
+            character: parser::byte_to_utf16(line, label_start),
+        },
+        end: Position {
+            line: line_idx,
+            character: parser::byte_to_utf16(line, label_start + label.len()),
+        },
+    };
+    Some((target_range, target_selection_range))
 }
 
 fn lsp_range(range: metadata::MetadataTextRange) -> Range {
@@ -181,6 +217,68 @@ mod tests {
         assert_eq!(loc.uri, uri);
         assert_eq!(loc.range.start.line, 2);
         assert_eq!(loc.range.start.character, 8);
+    }
+
+    #[test]
+    fn body_note_ref_returns_location_link_to_target_label() {
+        let path = PathBuf::from("/virtual/2603110001.typ");
+        let index = make_index("2603110001", "Target Note", path.clone());
+        let source = format!("{NOTE_CONTENT}中文😀 @2603110001\n");
+        let link = get_note_ref_definition_with_loader(
+            &source,
+            Position {
+                line: 5,
+                character: 8,
+            },
+            &index,
+            |load_path| (load_path == path.as_path()).then(|| TARGET_NOTE_CONTENT.to_string()),
+        )
+        .expect("expected body definition");
+
+        assert_eq!(link.target_uri, Url::from_file_path(path).unwrap());
+        assert_eq!(
+            link.origin_selection_range,
+            Some(Range::new(Position::new(5, 5), Position::new(5, 16)))
+        );
+        assert_eq!(link.target_range.start, Position::new(4, 0));
+        assert_eq!(
+            link.target_selection_range,
+            Range::new(Position::new(4, 9), Position::new(4, 21))
+        );
+    }
+
+    #[test]
+    fn body_note_ref_definition_supports_self_reference() {
+        let path = PathBuf::from("/virtual/2603110000.typ");
+        let index = make_index("2603110000", "Host", path.clone());
+        let source = format!("{NOTE_CONTENT}See @2603110000\n");
+        let link = get_note_ref_definition_with_loader(
+            &source,
+            Position::new(5, 8),
+            &index,
+            |load_path| (load_path == path.as_path()).then(|| source.clone()),
+        );
+        assert!(link.is_some());
+    }
+
+    #[test]
+    fn body_note_ref_definition_rejects_dead_and_overlong_ids() {
+        let path = PathBuf::from("/virtual/2603119999.typ");
+        let index = make_index("2603119999", "Other", path);
+        assert!(get_note_ref_definition_with_loader(
+            "See @2603110001",
+            Position::new(0, 8),
+            &index,
+            |_| Some(TARGET_NOTE_CONTENT.to_string()),
+        )
+        .is_none());
+        assert!(get_note_ref_definition_with_loader(
+            "See @26031100011",
+            Position::new(0, 8),
+            &index,
+            |_| Some(TARGET_NOTE_CONTENT.to_string()),
+        )
+        .is_none());
     }
 
     #[test]
