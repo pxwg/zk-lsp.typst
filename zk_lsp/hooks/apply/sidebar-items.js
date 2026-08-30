@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["apply_hook_text_edits","validate_hook_result"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_workspace_snapshot","extract_raw_meta_from_record","flatten_toml_table","metadata_default_map","metadata_kind_map","toml_value_to_inline_string","toml_value_to_string","toml_value_to_typed_value"],"struct":["CheckboxObs","NoteObs","WorkspaceSnapshot"]};

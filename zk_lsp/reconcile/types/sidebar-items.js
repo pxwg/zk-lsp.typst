@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CheckboxWriteback","DiagnosticKind","DiagnosticSeverity","EvalError","ParseError","Status","Type","TypeError","Value"],"struct":["CheckboxId","DiagnosticLocation","ReconcileDiagnostic"],"type":["NoteId"]};

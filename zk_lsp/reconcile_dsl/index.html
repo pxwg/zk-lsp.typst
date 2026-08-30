@@ -1,0 +1,376 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Reconcile DSL — cross-file state propagation driven by a Lisp rule language."><title>zk_lsp::reconcile_dsl - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="zk_lsp" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module reconcile_dsl</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../zk_lsp/index.html">zk_lsp</a><span class="version">0.5.5</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module reconcile_<wbr>dsl</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#reconcile-dsl--cross-file-state-propagation" title="Reconcile DSL — Cross-File State Propagation">Reconcile DSL — Cross-File State Propagation</a><ul><li><a href="#design-philosophy" title="Design Philosophy">Design Philosophy</a></li><li><a href="#module-structure" title="Module Structure">Module Structure</a></li><li><a href="#type-system" title="Type System">Type System</a></li><li><a href="#built-in-standard-library" title="Built-in Standard Library">Built-in Standard Library</a></li><li><a href="#load-order-and-merge-semantics" title="Load Order and Merge Semantics">Load Order and Merge Semantics</a></li><li><a href="#configuration" title="Configuration">Configuration</a></li><li><a href="#example-workflows" title="Example Workflows">Example Workflows</a></li><li><a href="#reconcile-run-lifecycle" title="Reconcile Run Lifecycle">Reconcile Run Lifecycle</a></li><li><a href="#static-checks-the-engine-performs" title="Static Checks the Engine Performs">Static Checks the Engine Performs</a></li><li><a href="#tips-for-ai-agents" title="Tips for AI Agents">Tips for AI Agents</a></li><li><a href="#see-also" title="See Also">See Also</a></li></ul></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate zk_<wbr>lsp</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">zk_lsp</a></div><h1>Module <span>reconcile_<wbr>dsl</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/zk_lsp/lib.rs.html#101">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Reconcile DSL — cross-file state propagation driven by a Lisp rule language.</p>
+<h2 id="reconcile-dsl--cross-file-state-propagation"><a class="doc-anchor" href="#reconcile-dsl--cross-file-state-propagation">§</a>Reconcile DSL — Cross-File State Propagation</h2>
+<p><code>zk-lsp reconcile</code> computes <strong>global semantic states</strong> across the whole wiki
+by solving a system of equations over the note graph.  The equations are
+written in a small Lisp-family DSL that you can extend or replace without
+recompiling the binary.</p>
+<hr />
+<h3 id="design-philosophy"><a class="doc-anchor" href="#design-philosophy">§</a>Design Philosophy</h3>
+<p>The DSL is grounded in the observe → effective → materialize three-layer
+model:</p>
+<div class="example-wrap"><pre class="language-text"><code>┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│   observe    │────▶│    effective     │────▶│   materialize    │
+│              │     │                  │     │                  │
+│ raw values   │     │ values after     │     │ fields written   │
+│ read from    │     │ user-defined     │     │ back to disk     │
+│ disk         │     │ DSL rules        │     │ (declared by     │
+│              │     │                  │     │ materialized_    │
+│              │     │                  │     │ fields)          │
+└──────────────┘     └──────────────────┘     └──────────────────┘</code></pre></div>
+<ul>
+<li><strong><code>observe_meta(n, field)</code></strong> — raw value currently on disk for note <code>n</code></li>
+<li><strong><code>effective_meta(n, field)</code></strong> — value after applying your DSL rules</li>
+<li><strong><code>effective_checked(c)</code></strong> — semantic checkbox status after applying your DSL rules</li>
+<li><strong><code>materialize_checked(c)</code></strong> — checkbox writeback policy used during file updates</li>
+<li><strong><code>materialized_fields(n)</code></strong> — list of field paths that are written back;
+everything else is read-only during the current run</li>
+</ul>
+<p>The key insight is that <code>checklist-status</code> is just one possible field in this
+framework.  Custom <code>user.*</code> fields participate in the same evaluation
+pipeline once they are declared in <code>materialized_fields</code>.</p>
+<p>When the dependency graph is a DAG, the evaluator resolves it in a single
+topological pass.  Cycles in task dependencies are a hard error reported
+with full source locations.</p>
+<hr />
+<h3 id="module-structure"><a class="doc-anchor" href="#module-structure">§</a>Module Structure</h3>
+<p>Every rule file must contain a single <code>(module ...)</code> form:</p>
+<div class="example-wrap"><pre class="language-lisp"><code>(module
+  ;; Optional policy block
+  (policy
+    (cycle error)          ;; &quot;error&quot; (default) — abort on cycles
+    (unknown-status none)) ;; default status when observation is missing
+
+  ;; Required: which fields to write back
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot;))
+
+  ;; Required: effective checkbox state for checkbox c
+  (define (effective_checked c)
+    ...)
+
+  ;; Required: how checkbox c should be written back to markdown
+  (define (materialize_checked c)
+    ...)
+
+  ;; Required: effective metadata value for note n, field path
+  (define (effective_meta n field)
+    ...))</code></pre></div>
+<p>Helper rules are regular <code>(define ...)</code> forms and may call each other and
+the built-in observations.</p>
+<hr />
+<h3 id="type-system"><a class="doc-anchor" href="#type-system">§</a>Type System</h3>
+<p>The DSL is statically type-checked before evaluation.  The types that appear
+in rule signatures are:</p>
+<div><table><thead><tr><th>Type</th><th>Description</th><th>Rust mirror</th></tr></thead><tbody>
+<tr><td><code>Bool</code></td><td><code>true</code> / <code>false</code></td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::Bool</code></a></td></tr>
+<tr><td><code>Status</code></td><td><code>none</code> / <code>todo</code> / <code>wip</code> / <code>done</code></td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::Status</code></a></td></tr>
+<tr><td><code>CheckboxWriteback</code></td><td><code>keep</code> / <code>unchecked</code> / <code>checked</code></td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::CheckboxWriteback</code></a></td></tr>
+<tr><td><code>Int</code></td><td>64-bit signed integer</td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::Int</code></a></td></tr>
+<tr><td><code>Nil</code></td><td>absence value; returned by <code>parent</code> for root items</td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::Nil</code></a></td></tr>
+<tr><td><code>String</code></td><td>arbitrary string; non-status metadata fields</td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::String</code></a></td></tr>
+<tr><td><code>List(T)</code></td><td>homogeneous list</td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::List</code></a></td></tr>
+<tr><td><code>NoteRef</code></td><td>runtime handle to a note</td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::NoteRef</code></a></td></tr>
+<tr><td><code>CheckboxRef</code></td><td>runtime handle to a checklist item</td><td><a href="../zk_lsp/reconcile/types/enum.Value.html"><code>Value::CheckboxRef</code></a></td></tr>
+</tbody></table>
+</div>
+<hr />
+<h3 id="built-in-standard-library"><a class="doc-anchor" href="#built-in-standard-library">§</a>Built-in Standard Library</h3><h4 id="observations-read-workspace-state"><a class="doc-anchor" href="#observations-read-workspace-state">§</a>Observations (read workspace state)</h4><div><table><thead><tr><th>Builtin</th><th>Signature</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>observe_checked(c)</code></td><td><code>CheckboxRef → Status</code></td><td>Raw checkbox state (<code>done</code>/<code>todo</code>)</td></tr>
+<tr><td><code>observe_meta(n, field)</code></td><td><code>NoteRef × String → T</code></td><td>Read a metadata field</td></tr>
+<tr><td><code>targets(c)</code></td><td><code>CheckboxRef → List(NoteRef)</code></td><td>Ref-item <code>@ID</code> targets</td></tr>
+<tr><td><code>backlinks(n)</code></td><td><code>NoteRef → List(NoteRef)</code></td><td>Notes referencing <code>n</code> via <code>@ID</code> items</td></tr>
+<tr><td><code>parent(c)</code></td><td><code>CheckboxRef → CheckboxRef|Nil</code></td><td>Parent in the indent tree</td></tr>
+<tr><td><code>owner_note(c)</code></td><td><code>CheckboxRef → NoteRef</code></td><td>Note that owns checkbox <code>c</code></td></tr>
+<tr><td><code>local_checkboxes(n)</code></td><td><code>NoteRef → List(CheckboxRef)</code></td><td>All checklist items in <code>n</code></td></tr>
+<tr><td><code>children(c)</code></td><td><code>CheckboxRef → List(CheckboxRef)</code></td><td>Direct child checkboxes</td></tr>
+</tbody></table>
+</div><h4 id="status-operations"><a class="doc-anchor" href="#status-operations">§</a>Status Operations</h4><div><table><thead><tr><th>Builtin</th><th>Signature</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>aggregate_status(xs)</code></td><td><code>List(Status) → Status</code></td><td>Ignores <code>none</code> when any concrete status exists; returns <code>none</code> only when all inputs are <code>none</code> or the list is empty</td></tr>
+<tr><td><code>done?</code> / <code>todo?</code> / <code>wip?</code> / <code>none?</code></td><td><code>Status → Bool</code></td><td>Status predicates</td></tr>
+<tr><td><code>all_done(xs)</code></td><td><code>List(Status) → Bool</code></td><td>True iff every element is <code>done</code></td></tr>
+</tbody></table>
+</div><h4 id="checkbox-materialization"><a class="doc-anchor" href="#checkbox-materialization">§</a>Checkbox Materialization</h4>
+<p><code>materialize_checked(c)</code> returns a <code>CheckboxWriteback</code>:</p>
+<div><table><thead><tr><th>Literal</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>checked</code></td><td>Write <code>- [x]</code></td></tr>
+<tr><td><code>unchecked</code></td><td>Write <code>- [ ]</code></td></tr>
+<tr><td><code>keep</code></td><td>Preserve the source checkbox text</td></tr>
+</tbody></table>
+</div><h4 id="boolean-operations"><a class="doc-anchor" href="#boolean-operations">§</a>Boolean Operations</h4><div><table><thead><tr><th>Builtin</th><th>Signature</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>not(b)</code></td><td><code>Bool → Bool</code></td><td>Logical negation</td></tr>
+<tr><td><code>and(b...)</code> / <code>or(b...)</code></td><td><code>Bool... → Bool</code></td><td>Short-circuit connectives</td></tr>
+<tr><td><code>eq?(a, b)</code></td><td><code>T × T → Bool</code></td><td>Structural equality</td></tr>
+<tr><td><code>nil?(v)</code></td><td><code>Any → Bool</code></td><td>True iff <code>v</code> is <code>Nil</code></td></tr>
+</tbody></table>
+</div><h4 id="arithmetic"><a class="doc-anchor" href="#arithmetic">§</a>Arithmetic</h4><div><table><thead><tr><th>Builtin</th><th>Signature</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>+</code> / <code>-</code></td><td><code>Int × Int → Int</code></td><td>Addition / subtraction</td></tr>
+<tr><td><code>&lt;</code> / <code>&gt;</code> / <code>&lt;=</code> / <code>&gt;=</code></td><td><code>Int × Int → Bool</code></td><td>Integer comparisons</td></tr>
+</tbody></table>
+</div><h4 id="list-operations"><a class="doc-anchor" href="#list-operations">§</a>List Operations</h4><div><table><thead><tr><th>Builtin</th><th>Signature</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>list(x...)</code></td><td><code>T... → List(T)</code></td><td>Construct a list literal</td></tr>
+<tr><td><code>map(f, xs)</code></td><td><code>(T→U) × List(T) → List(U)</code></td><td>Apply <code>f</code> to each element</td></tr>
+<tr><td><code>filter(f, xs)</code></td><td><code>(T→Bool) × List(T) → List(T)</code></td><td>Keep elements where <code>f</code> is true</td></tr>
+<tr><td><code>reduce(f, init, xs)</code></td><td><code>(A×B→A) × A × List(B) → A</code></td><td>Fold</td></tr>
+<tr><td><code>length(xs)</code></td><td><code>List(T) → Int</code></td><td>Element count</td></tr>
+<tr><td><code>empty?(xs)</code></td><td><code>List(T) → Bool</code></td><td>True iff list is empty</td></tr>
+<tr><td><code>union(xs, ys)</code></td><td><code>List(T) × List(T) → List(T)</code></td><td>Union (no duplicates)</td></tr>
+<tr><td><code>contains?(xs, v)</code></td><td><code>List(T) × T → Bool</code></td><td>Membership test</td></tr>
+<tr><td><code>dedup(xs)</code></td><td><code>List(T) → List(T)</code></td><td>Remove duplicates (first occurrence wins)</td></tr>
+</tbody></table>
+</div>
+<p><strong>Higher-order forms:</strong> <code>map</code>, <code>filter</code>, and <code>reduce</code> take a <em>function
+symbol</em> (not a value) — write the name unquoted:</p>
+<div class="example-wrap"><pre class="language-lisp"><code>(map done? statuses)
+(filter is_done notes)
+(reduce + 0 counts)</code></pre></div>
+<hr />
+<h3 id="load-order-and-merge-semantics"><a class="doc-anchor" href="#load-order-and-merge-semantics">§</a>Load Order and Merge Semantics</h3><div class="example-wrap"><pre class="language-text"><code>1. Built-in default module (examples/rules/checklist.lisp)
+        ↓  (unless disable_default_reconcile_rules = true)
+2. User-level [[reconcile.rule]] files (config.toml order)
+        ↓
+3. Project-level [[reconcile.rule]] files (zk-lsp.toml order)</code></pre></div>
+<p>When a later file defines a rule with the same name, it <strong>replaces</strong> the
+earlier definition.  Helper rules that are not redefined are inherited.
+<code>(policy ...)</code> is replaced only when the later file explicitly declares one.</p>
+<hr />
+<h3 id="configuration"><a class="doc-anchor" href="#configuration">§</a>Configuration</h3><div class="example-wrap"><pre class="language-toml"><code># ~/.config/zk-lsp/config.toml
+[[reconcile.rule]]
+path = &quot;~/.config/zk-lsp/reconcile/common.lisp&quot;
+
+# &lt;wiki-root&gt;/zk-lsp.toml
+disable_default_reconcile_rules = false   # set true to start from scratch
+
+[[reconcile.rule]]
+path = &quot;./reconcile/project_rules.lisp&quot;</code></pre></div>
+<p>Rules are loaded fresh from disk on every <code>zk-lsp reconcile</code> invocation.</p>
+<hr />
+<h3 id="example-workflows"><a class="doc-anchor" href="#example-workflows">§</a>Example Workflows</h3><h4 id="1--default-checklist-behavior-built-in"><a class="doc-anchor" href="#1--default-checklist-behavior-built-in">§</a>1 — Default checklist behavior (built-in)</h4>
+<p>This is <code>examples/rules/checklist.lisp</code> in the repository, the module that
+ships with the binary:</p>
+<div class="example-wrap"><pre class="language-lisp"><code>(module
+  (policy
+    (cycle error)
+    (unknown-status none))
+
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot;))
+
+  ;; Leaf checkboxes use their observed state; parents derive from children.
+  (define (child_status c)
+    (if (empty? (children c))
+        done
+        (aggregate_status (map effective_checked (children c)))))
+
+  (define (local_status c)
+    (if (empty? (children c))
+        (observe_checked c)
+        (child_status c)))
+
+  ;; Ref-item targets with status `none` are ignored; the checkbox falls back
+  ;; to its local marker in that case.
+  (define (concrete_target_statuses c)
+    (union
+      (filter done? (map target_status (targets c)))
+      (union
+        (filter todo? (map target_status (targets c)))
+        (filter wip? (map target_status (targets c))))))
+
+  (define (targets_allow? c)
+    (if (empty? (targets c))
+        true
+        (all_done (concrete_target_statuses c))))
+
+  (define (effective_checked c)
+    (if (empty? (targets c))
+        (local_status c)
+        (if (empty? (concrete_target_statuses c))
+            (local_status c)
+            (if (targets_allow? c)
+                (child_status c)
+                todo))))
+
+  ;; Checkbox writeback is also controlled by DSL.
+  (define (materialize_checked c)
+    (if (done? (effective_checked c))
+        checked
+        (if (none? (effective_checked c))
+            keep
+            unchecked)))
+
+  (define (target_status n)
+    (effective_meta n &quot;checklist-status&quot;))
+
+  ;; Archived notes are always done; empty-checklist notes keep their
+  ;; observed value; otherwise aggregate leaf states.
+  (define (effective_meta n field)
+    (if (eq? field &quot;checklist-status&quot;)
+        (if (eq? (observe_meta n &quot;relation&quot;) &quot;archived&quot;)
+            done
+            (if (empty? (local_checkboxes n))
+                (observe_meta n &quot;checklist-status&quot;)
+                (aggregate_status (map effective_checked (local_checkboxes n)))))
+        (observe_meta n field))))</code></pre></div><h4 id="2--backlink-verified-badge"><a class="doc-anchor" href="#2--backlink-verified-badge">§</a>2 — Backlink-verified badge</h4>
+<p>Mark a note <code>user.verified = "true"</code> when at least three <em>done</em> notes link
+to it.  Demonstrates: graph queries, numeric comparisons, custom fields.</p>
+<div class="example-wrap"><pre class="language-lisp"><code>;; examples/rules/backlink_verified.lisp
+(module
+  (policy (cycle error) (unknown-status none))
+
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot; &quot;user.verified&quot;))
+
+  (define (done_backlink_count n)
+    (length (filter is_done_note (backlinks n))))
+
+  (define (is_done_note n)
+    (done? (observe_meta n &quot;checklist-status&quot;)))
+
+  (define (effective_checked c)
+    (observe_checked c))
+
+  (define (materialize_checked c)
+    (if (done? (effective_checked c))
+        checked
+        (if (none? (effective_checked c))
+            keep
+            unchecked)))
+
+  (define (effective_meta n field)
+    (if (eq? field &quot;user.verified&quot;)
+        (if (&gt;= (done_backlink_count n) 3) &quot;true&quot; &quot;false&quot;)
+        (observe_meta n field))))</code></pre></div>
+<p>To enable alongside the default checklist behavior:</p>
+<div class="example-wrap"><pre class="language-toml"><code># &lt;wiki-root&gt;/zk-lsp.toml
+[[reconcile.rule]]
+path = &quot;./reconcile/backlink_verified.lisp&quot;</code></pre></div>
+<p>Because both define <code>materialized_fields</code>, the last file wins.  Override
+only that rule to merge both field lists:</p>
+<div class="example-wrap"><pre class="language-lisp"><code>;; reconcile/backlink_verified.lisp  (project layer)
+(module
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot; &quot;user.verified&quot;))
+
+  ;; … rest of the rules from above …)</code></pre></div><h4 id="3--priority-aware-status-override-ai-agent-workflow"><a class="doc-anchor" href="#3--priority-aware-status-override-ai-agent-workflow">§</a>3 — Priority-aware status override (AI agent workflow)</h4>
+<p>An AI agent adds a <code>user.priority = "blocked"</code> field to a note.  The DSL
+rule treats any blocked note as <code>wip</code> regardless of its checklist state:</p>
+<div class="example-wrap"><pre class="language-lisp"><code>(module
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot;))
+
+  (define (effective_checked c)
+    (observe_checked c))
+
+  (define (materialize_checked c)
+    (if (done? (effective_checked c))
+        checked
+        unchecked))
+
+  (define (effective_meta n field)
+    (if (eq? field &quot;checklist-status&quot;)
+        (if (eq? (observe_meta n &quot;user.priority&quot;) &quot;blocked&quot;)
+            wip
+            (observe_meta n &quot;checklist-status&quot;))
+        (observe_meta n field))))</code></pre></div>
+<p>Combine with an AI agent pipeline:</p>
+<div class="example-wrap"><pre class="language-bash"><code># Agent marks a note as blocked
+note_id=&quot;2603151158&quot;
+current=$(zk-lsp note-info &quot;$note_id&quot; | jq -r &#39;.metadata[&quot;user&quot;][&quot;priority&quot;] // &quot;normal&quot;&#39;)
+if [ &quot;$current&quot; != &quot;blocked&quot; ]; then
+  # patch the TOML via a Lua hook (or direct sed for simplicity in scripts):
+  sed -i &#39;&#39; &#39;s/priority = &quot;normal&quot;/priority = &quot;blocked&quot;/&#39; &quot;note/${note_id}.typ&quot;
+fi
+# Propagate the new state across the wiki
+zk-lsp reconcile</code></pre></div><h4 id="4--multi-field-materialize-review-workflow"><a class="doc-anchor" href="#4--multi-field-materialize-review-workflow">§</a>4 — Multi-field materialize (review workflow)</h4>
+<p>A research wiki where each note tracks both <code>checklist-status</code> and a
+<code>user.review-state</code> (draft / reviewed / published):</p>
+<div class="example-wrap"><pre class="language-lisp"><code>(module
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot; &quot;user.review-state&quot;))
+
+  (define (effective_checked c)
+    (observe_checked c))
+
+  (define (materialize_checked c)
+    (if (done? (effective_checked c))
+        checked
+        (if (none? (effective_checked c))
+            keep
+            unchecked)))
+
+  (define (effective_meta n field)
+    (if (eq? field &quot;checklist-status&quot;)
+        (if (empty? (local_checkboxes n))
+            (observe_meta n &quot;checklist-status&quot;)
+            (aggregate_status (map effective_checked (local_checkboxes n))))
+        ;; review-state: auto-advance from &quot;draft&quot; to &quot;reviewed&quot;
+        ;; when checklist-status becomes &quot;done&quot;
+        (if (eq? field &quot;user.review-state&quot;)
+            (if (and (eq? (observe_meta n &quot;user.review-state&quot;) &quot;draft&quot;)
+                     (done? (effective_meta n &quot;checklist-status&quot;)))
+                &quot;reviewed&quot;
+                (observe_meta n &quot;user.review-state&quot;))
+            (observe_meta n field)))))</code></pre></div><h4 id="5--minimal-custom-module-from-scratch"><a class="doc-anchor" href="#5--minimal-custom-module-from-scratch">§</a>5 — Minimal custom module (from scratch)</h4>
+<p>When <code>disable_default_reconcile_rules = true</code>, you must provide at least
+these four entry points:</p>
+<div class="example-wrap"><pre class="language-lisp"><code>(module
+  (define (materialized_fields n)
+    (list &quot;checklist-status&quot;))
+
+  (define (effective_checked c)
+    (observe_checked c))
+
+  (define (materialize_checked c)
+    (if (done? (effective_checked c))
+        checked
+        unchecked))
+
+  (define (effective_meta n field)
+    (observe_meta n field)))</code></pre></div>
+<hr />
+<h3 id="reconcile-run-lifecycle"><a class="doc-anchor" href="#reconcile-run-lifecycle">§</a>Reconcile Run Lifecycle</h3><div class="example-wrap"><pre class="language-text"><code>zk-lsp reconcile [--dry-run]
+        │
+        ├─ 1. Scan wiki → build note/checkbox/metadata snapshot
+        ├─ 2. Load built-in module (unless disabled)
+        ├─ 3. Load + merge [[reconcile.rule]] files in order
+        ├─ 4. Parse + type-check the merged module
+        ├─ 5. Evaluate: topological sort → effective_checked / materialize_checked / effective_meta
+        ├─ 6. Collect diagnostics (cycles → hard abort with source locations)
+        └─ 7. Write back changed states (unless --dry-run)
+               └─ fail if a declared materialized field cannot be patched</code></pre></div>
+<p>Use <code>--dry-run</code> to preview changes without writing files.</p>
+<hr />
+<h3 id="static-checks-the-engine-performs"><a class="doc-anchor" href="#static-checks-the-engine-performs">§</a>Static Checks the Engine Performs</h3>
+<p>Following the graph-semantics model, the evaluator can detect several classes
+of rule errors at parse / type-check time before any evaluation starts:</p>
+<div><table><thead><tr><th>Check</th><th>When detected</th></tr></thead><tbody>
+<tr><td>Cycle in task-dependency graph</td><td>evaluation phase (hard error)</td></tr>
+<tr><td>Write conflict (two rules materialize same field without priority)</td><td>load / merge</td></tr>
+<tr><td>Unknown <code>@ID</code> reference</td><td>index phase</td></tr>
+<tr><td>Type mismatch in rule body</td><td>type-check phase</td></tr>
+<tr><td>Duplicate rule name</td><td>parse phase</td></tr>
+<tr><td>Unknown policy key or value</td><td>parse phase</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h3 id="tips-for-ai-agents"><a class="doc-anchor" href="#tips-for-ai-agents">§</a>Tips for AI Agents</h3>
+<ul>
+<li><code>zk-lsp reconcile --dry-run</code> prints what would change without modifying
+files — safe to call from an agent pipeline to assess workspace state.</li>
+<li><code>zk-lsp note-info &lt;id&gt;</code> returns JSON including all materialized <code>user.*</code>
+fields, so agents can read derived state without parsing Typst files.</li>
+<li><code>zk-lsp export &lt;id&gt; --depth 2</code> produces a Markdown document containing
+the entry note plus up to two hops of linked context — useful as a
+context window for an LLM summarisation or tagging step.</li>
+<li><code>zk-lsp export &lt;id&gt; --depth 2 --inverse</code> follows backlinks instead,
+listing ancestor notes first — useful for “what led to this idea?” queries.</li>
+</ul>
+<hr />
+<h3 id="see-also"><a class="doc-anchor" href="#see-also">§</a>See Also</h3>
+<ul>
+<li><a href="lua_hooks/index.html">Lua Hooks guide</a> — per-note format pipeline</li>
+<li><a href="../zk_lsp/reconcile/types/index.html"><code>reconcile::types</code></a> — Rust type
+definitions for the DSL value system</li>
+<li><a href="../zk_lsp/config/struct.ZkLspConfig.html"><code>config::ZkLspConfig</code></a> — full
+configuration struct reference</li>
+</ul>
+</div></details></section></div></main></body></html>

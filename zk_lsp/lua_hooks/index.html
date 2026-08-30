@@ -1,0 +1,266 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Lua Hooks format pipeline — per-note transformations run on every save."><title>zk_lsp::lua_hooks - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="zk_lsp" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module lua_hooks</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../zk_lsp/index.html">zk_lsp</a><span class="version">0.5.5</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module lua_<wbr>hooks</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#lua-hooks--format-pipeline" title="Lua Hooks — Format Pipeline">Lua Hooks — Format Pipeline</a><ul><li><a href="#concepts" title="Concepts">Concepts</a></li><li><a href="#hook-input--noteinput" title="Hook Input — `NoteInput`">Hook Input — <code>NoteInput</code></a></li><li><a href="#hook-output--hookresult" title="Hook Output — `HookResult`">Hook Output — <code>HookResult</code></a></li><li><a href="#configuration" title="Configuration">Configuration</a></li><li><a href="#built-in-hooks" title="Built-in Hooks">Built-in Hooks</a></li><li><a href="#example-workflows" title="Example Workflows">Example Workflows</a></li><li><a href="#tips-for-ai-agents" title="Tips for AI Agents">Tips for AI Agents</a></li><li><a href="#full-emmylua-type-reference" title="Full EmmyLua Type Reference">Full EmmyLua Type Reference</a></li></ul></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate zk_<wbr>lsp</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">zk_lsp</a></div><h1>Module <span>lua_<wbr>hooks</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/zk_lsp/lib.rs.html#96">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Lua Hooks format pipeline — per-note transformations run on every save.</p>
+<h2 id="lua-hooks--format-pipeline"><a class="doc-anchor" href="#lua-hooks--format-pipeline">§</a>Lua Hooks — Format Pipeline</h2>
+<p><code>zk-lsp format</code> runs a pipeline of Lua scripts against each note on every
+save. Hooks are the primary extension point for <strong>per-note transformations</strong>:
+normalising checkboxes, computing tags, enforcing local conventions, or
+generating derived metadata from note content.</p>
+<p>Cross-file logic (propagating done-states between notes) belongs to the
+<a href="reconcile_dsl/index.html">Reconcile DSL</a>, not here.</p>
+<hr />
+<h3 id="concepts"><a class="doc-anchor" href="#concepts">§</a>Concepts</h3><div class="example-wrap"><pre class="language-text"><code>┌──────────────────────────────────────────────────────────┐
+│  willSaveWaitUntil (every save)                          │
+│                                                          │
+│   parse note                                             │
+│       │                                                  │
+│       ▼                                                  │
+│   built-in hooks (checklist.lua, relation_status.lua)    │
+│       │   (unless disable_default_hooks = true)          │
+│       ▼                                                  │
+│   user hooks  [[hook]] path = &quot;…&quot;                        │
+│       │   (user-level first, then project-level)         │
+│       ▼                                                  │
+│   apply HookResult { metadata, edits }                   │
+└──────────────────────────────────────────────────────────┘</code></pre></div>
+<p>Each hook is a Lua 5.4 file containing a top-level <code>run(note)</code> function.
+Hooks are stateless: they receive the current note and return patches; they
+cannot read other notes or the wider wiki graph.</p>
+<hr />
+<h3 id="hook-input--noteinput"><a class="doc-anchor" href="#hook-input--noteinput">§</a>Hook Input — <code>NoteInput</code></h3>
+<p>The <code>note</code> argument passed to <code>run</code> is a Lua table matching the
+<a href="../zk_lsp/hooks/types/struct.HookNoteInput.html"><code>HookNoteInput</code></a> Rust type:</p>
+<div class="example-wrap"><pre class="language-lua"><code>---@class NoteInput
+---@field id         string              -- 10-digit note ID (YYMMDDHHMM)
+---@field title      Title|nil           -- title heading; nil if unparseable
+---@field content    string              -- full raw note content
+---@field metadata   table&lt;string, any&gt;  -- TOML metadata key→value pairs
+---@field metadata_defaults table&lt;string, any&gt; -- config-declared default metadata values
+---@field checkboxes Checkbox[]          -- all checklist items in source order
+---@field headings   Heading[]           -- all headings (level 1..6)
+---@field metadata_fields MetadataField[] -- config-declared metadata fields</code></pre></div><h4 id="metadatafield"><a class="doc-anchor" href="#metadatafield">§</a><code>MetadataField</code></h4><div class="example-wrap"><pre class="language-lua"><code>---@class MetadataField
+---@field path string   -- dotted path, e.g. &quot;user.priority&quot;
+---@field kind string   -- &quot;string&quot; | &quot;boolean&quot; | &quot;array-string&quot;
+---@field default any   -- configured default value</code></pre></div><h4 id="title"><a class="doc-anchor" href="#title">§</a><code>Title</code></h4><div class="example-wrap"><pre class="language-lua"><code>---@class Title
+---@field text string   -- heading text without the `= ` prefix or `&lt;ID&gt;` label
+---@field span Span</code></pre></div><h4 id="checkbox"><a class="doc-anchor" href="#checkbox">§</a><code>Checkbox</code></h4>
+<p>Mirrors <a href="../zk_lsp/hooks/types/struct.HookCheckbox.html"><code>HookCheckbox</code></a>:</p>
+<div class="example-wrap"><pre class="language-lua"><code>---@class Checkbox
+---@field id       string    -- &quot;local:{line_idx}&quot; for local; first target_id for ref
+---@field kind     string    -- &quot;local&quot; | &quot;ref&quot;
+---@field checked  boolean
+---@field targets  string[]  -- @ID tokens; empty for local items
+---@field text     string    -- body text after &quot;- [x] &quot;
+---@field span     Span      -- full-line byte range
+---@field line_idx integer   -- 0-based line index inside the note
+---@field indent   integer   -- leading space count (indentation level)</code></pre></div>
+<p><code>line_idx</code> and <code>indent</code> let hooks sort checkboxes and build the
+parent–child tree without any string parsing.</p>
+<h4 id="span"><a class="doc-anchor" href="#span">§</a><code>Span</code></h4>
+<p>Mirrors <a href="../zk_lsp/hooks/types/struct.HookSpan.html"><code>HookSpan</code></a>:</p>
+<div class="example-wrap"><pre class="language-lua"><code>---@class Span
+---@field start_byte  integer
+---@field end_byte    integer
+---@field start_line  integer  -- 0-based
+---@field start_col   integer  -- 0-based byte column
+---@field end_line    integer
+---@field end_col     integer</code></pre></div><h4 id="heading"><a class="doc-anchor" href="#heading">§</a><code>Heading</code></h4><div class="example-wrap"><pre class="language-lua"><code>---@class Heading
+---@field level integer   -- 1 = &quot;=&quot;, 2 = &quot;==&quot;, …
+---@field text  string
+---@field span  Span</code></pre></div>
+<hr />
+<h3 id="hook-output--hookresult"><a class="doc-anchor" href="#hook-output--hookresult">§</a>Hook Output — <code>HookResult</code></h3>
+<p><code>run(note)</code> must return a table (or an empty table <code>{}</code>):</p>
+<div class="example-wrap"><pre class="language-lua"><code>---@class HookResult
+---@field metadata  table&lt;string, any&gt;|nil   -- metadata keys to patch
+---@field edits     TextEdit[]|nil           -- byte-range text replacements</code></pre></div>
+<p>Mirrors <a href="../zk_lsp/hooks/types/struct.HookResult.html"><code>HookResult</code></a>.</p>
+<h4 id="textedit"><a class="doc-anchor" href="#textedit">§</a><code>TextEdit</code></h4>
+<p>Mirrors <a href="../zk_lsp/hooks/types/struct.HookTextEdit.html"><code>HookTextEdit</code></a>:</p>
+<div class="example-wrap"><pre class="language-lua"><code>---@class TextEdit
+---@field start_byte integer
+---@field end_byte   integer
+---@field text       string   -- replacement text (may be empty to delete)</code></pre></div>
+<p>Edits are applied in <strong>reverse byte order</strong> so that earlier byte offsets
+remain valid as later edits are committed.</p>
+<hr />
+<h3 id="configuration"><a class="doc-anchor" href="#configuration">§</a>Configuration</h3><div class="example-wrap"><pre class="language-toml"><code># ~/.config/zk-lsp/config.toml   (user-level)
+# &lt;wiki-root&gt;/zk-lsp.toml        (project-level; merged after user)
+
+# Disable the two built-in hooks entirely:
+disable_default_hooks = true
+
+# Add file hooks (user hooks run first, then project hooks):
+[[hook]]
+path = &quot;~/.config/zk-lsp/hooks/my_hook.lua&quot;
+
+[[hook]]
+path = &quot;./hooks/project_hook.lua&quot;</code></pre></div>
+<p>Hooks are loaded fresh from disk on every <code>zk-lsp format</code> invocation —
+editing a <code>.lua</code> file takes effect on the next save without recompiling.</p>
+<hr />
+<h3 id="built-in-hooks"><a class="doc-anchor" href="#built-in-hooks">§</a>Built-in Hooks</h3>
+<p>Two hooks are embedded in the binary and run by default:</p>
+<div><table><thead><tr><th>Hook</th><th>Effect</th></tr></thead><tbody>
+<tr><td><code>checklist.lua</code></td><td>Propagates nested checkbox states bottom-up; sets <code>checklist-status</code> from leaf nodes</td></tr>
+<tr><td><code>relation_status.lua</code></td><td>Forces <code>checklist-status = "done"</code> when <code>relation</code> is <code>"archived"</code> or <code>"legacy"</code></td></tr>
+</tbody></table>
+</div>
+<p>Source lives under <code>examples/hooks/</code> in the repository.</p>
+<hr />
+<h3 id="example-workflows"><a class="doc-anchor" href="#example-workflows">§</a>Example Workflows</h3><h4 id="1--tag-normaliser"><a class="doc-anchor" href="#1--tag-normaliser">§</a>1 — Tag normaliser</h4>
+<p>Ensure every note with a <code>user.course</code> field also has the corresponding tag
+in its content. Useful for wikis where tags drive searches.</p>
+<div class="example-wrap"><pre class="language-lua"><code>-- hooks/tag_sync.lua
+-- If metadata contains user.course, emit an edit to ensure the
+-- course name appears in the note body after the title line.
+
+function run(note)
+  local course = note.metadata[&quot;user&quot;] and note.metadata[&quot;user&quot;][&quot;course&quot;]
+  if not course or course == &quot;&quot; then
+    return {}
+  end
+
+  local tag = &quot;#tag.&quot; .. course:lower():gsub(&quot;%s+&quot;, &quot;_&quot;)
+  if note.content:find(tag, 1, true) then
+    return {}   -- already present
+  end
+
+  -- Find the byte position just after the title line
+  local title_end = note.title and note.title.span.end_byte or 0
+  return {
+    edits = {
+      { start_byte = title_end, end_byte = title_end, text = &quot;\n&quot; .. tag }
+    }
+  }
+end</code></pre></div><h4 id="2--auto-abstract-generator-ai-agent-hook"><a class="doc-anchor" href="#2--auto-abstract-generator-ai-agent-hook">§</a>2 — Auto-abstract generator (AI agent hook)</h4>
+<p>Call an external CLI to populate <code>abstract</code> when the field is empty.
+This is the pattern to use from a scripting pipeline (e.g. a Git pre-commit
+hook or a nightly cron job that pipes each note through <code>zk-lsp format</code>).</p>
+<div class="example-wrap"><pre class="language-lua"><code>-- hooks/auto_abstract.lua
+local function shell(cmd)
+  local f = io.popen(cmd, &quot;r&quot;)
+  if not f then return nil end
+  local s = f:read(&quot;*a&quot;)
+  f:close()
+  return s and s:match(&quot;^%s*(.-)%s*$&quot;)  -- trim whitespace
+end
+
+function run(note)
+  local meta = note.metadata or {}
+  if meta[&quot;abstract&quot;] and meta[&quot;abstract&quot;] ~= &quot;&quot; then
+    return {}   -- already set; honour existing value
+  end
+
+  -- Write note content to a temp file and call your summariser
+  local tmp = os.tmpname()
+  local f = io.open(tmp, &quot;w&quot;)
+  if not f then return {} end
+  f:write(note.content)
+  f:close()
+
+  local summary = shell(&quot;my-summariser --format=one-line &quot; .. tmp)
+  os.remove(tmp)
+
+  if not summary or summary == &quot;&quot; then return {} end
+  return { metadata = { abstract = summary } }
+end</code></pre></div>
+<p>Invoke from a Git pre-commit hook:</p>
+<div class="example-wrap"><pre class="language-bash"><code>#!/usr/bin/env bash
+# .git/hooks/pre-commit
+set -euo pipefail
+for f in $(git diff --cached --name-only -- &#39;note/*.typ&#39;); do
+  zk-lsp format &lt; &quot;$f&quot; &gt; &quot;$f.tmp&quot; &amp;&amp; mv &quot;$f.tmp&quot; &quot;$f&quot;
+  git add &quot;$f&quot;
+done</code></pre></div><h4 id="3--priority-badge"><a class="doc-anchor" href="#3--priority-badge">§</a>3 — Priority badge</h4>
+<p>Map <code>user.priority</code> to a visual badge at the top of each note body.</p>
+<div class="example-wrap"><pre class="language-lua"><code>-- hooks/priority_badge.lua
+local BADGES = { high = &quot;🔴&quot;, normal = &quot;🟡&quot;, low = &quot;🟢&quot; }
+
+function run(note)
+  local user = note.metadata[&quot;user&quot;] or {}
+  local priority = user[&quot;priority&quot;] or &quot;normal&quot;
+  local badge = BADGES[priority] or &quot;&quot;
+  if badge == &quot;&quot; then return {} end
+
+  -- Insert after the first heading
+  if not note.title then return {} end
+  local insert_pos = note.title.span.end_byte
+
+  local marker = &quot;&lt;!-- priority:&quot; .. priority .. &quot; --&gt;&quot;
+  if note.content:find(marker, 1, true) then
+    return {}   -- already annotated
+  end
+
+  return {
+    edits = {
+      { start_byte = insert_pos, end_byte = insert_pos,
+        text = &quot;\n&quot; .. badge .. &quot; &quot; .. marker }
+    }
+  }
+end</code></pre></div><h4 id="4--word-count-metadata-ai-agent-pipeline-example"><a class="doc-anchor" href="#4--word-count-metadata-ai-agent-pipeline-example">§</a>4 — Word-count metadata (AI agent pipeline example)</h4>
+<p>Useful for an AI agent that wants to skip summarising short notes.</p>
+<div class="example-wrap"><pre class="language-lua"><code>-- hooks/word_count.lua
+function run(note)
+  local count = 0
+  for _ in note.content:gmatch(&quot;%S+&quot;) do count = count + 1 end
+  return { metadata = { [&quot;user.word-count&quot;] = count } }
+end</code></pre></div>
+<p>An external script can then query the field with <code>zk-lsp note-info &lt;id&gt;</code> and
+decide whether the note needs further processing.</p>
+<h4 id="5--backfill-missing-metadata-keys-from-config-defaults"><a class="doc-anchor" href="#5--backfill-missing-metadata-keys-from-config-defaults">§</a>5 — Backfill missing metadata keys from config defaults</h4>
+<p>Useful when <code>[[metadata.field]]</code> adds a new key and older records have not been
+updated yet. On save, the hook emits only missing keys; <code>zk-lsp</code> writes those
+flat field paths into the current note’s central metadata record.</p>
+<div class="example-wrap"><pre class="language-lua"><code>-- hooks/ensure_metadata_defaults.lua
+local function lookup_path(tbl, path)
+  local current = tbl
+  for segment in path:gmatch(&quot;[^.]+&quot;) do
+    if type(current) ~= &quot;table&quot; then return nil end
+    current = current[segment]
+    if current == nil then return nil end
+  end
+  return current
+end
+
+function run(note)
+  local patch = {}
+
+  for _, field in ipairs(note.metadata_fields or {}) do
+    if lookup_path(note.metadata, field.path) == nil then
+      patch[field.path] = field.default
+    end
+  end
+
+  if next(patch) == nil then
+    return {}
+  end
+
+  return { metadata = patch }
+end</code></pre></div>
+<p>Config:</p>
+<div class="example-wrap"><pre class="language-toml"><code>[[metadata.field]]
+path = &quot;user.priority&quot;
+kind = &quot;string&quot;
+default = &quot;normal&quot;
+
+[[hook]]
+path = &quot;./hooks/ensure_metadata_defaults.lua&quot;</code></pre></div>
+<p>See <a href="../examples/hooks/ensure_metadata_defaults.lua"><code>examples/hooks/ensure_metadata_defaults.lua</code></a>
+for the full sample.</p>
+<hr />
+<h3 id="tips-for-ai-agents"><a class="doc-anchor" href="#tips-for-ai-agents">§</a>Tips for AI Agents</h3>
+<ul>
+<li>Use <code>zk-lsp note-info &lt;id&gt;</code> to inspect a note’s current metadata as JSON
+before deciding whether a hook needs to run.</li>
+<li>Pipe through <code>zk-lsp format</code> at the end of any pipeline that modifies a
+note — it re-normalises checkboxes and applies all hooks.</li>
+<li>Combine <code>zk-lsp export &lt;id&gt; --depth 2</code> with your LLM call to get the
+surrounding context (linked notes) in a single Markdown document.</li>
+<li><code>zk-lsp check</code> exits 1 on dead links — use it as a CI gate after bulk
+note creation or deletion.</li>
+</ul>
+<hr />
+<h3 id="full-emmylua-type-reference"><a class="doc-anchor" href="#full-emmylua-type-reference">§</a>Full EmmyLua Type Reference</h3>
+<p>See <code>lua/zk_hook_types.lua</code> in the repository for the complete EmmyLua
+annotations. The Rust types they mirror are in the
+<a href="../zk_lsp/hooks/types/index.html"><code>hooks::types</code></a> module.</p>
+</div></details></section></div></main></body></html>
